@@ -7,7 +7,9 @@ repository.
 """
 
 import logging
-
+import sys
+sys.path.append("./src")
+sys.path.append("./BrowserGym/src")
 from agentlab.agents.generic_agent import (
     AGENT_LLAMA3_70B,
     AGENT_LLAMA31_70B,
@@ -19,12 +21,14 @@ from agentlab.agents.generic_agent import (
     AGENT_CLAUDE_SONNET_35,
     AGENT_GPT5_MINI,
 )
+from agentlab.agents.webmall_generic_agent.planning_agent import AGENT_5_PLANNER
+
 from agentlab.experiments.study import Study
 
 logging.getLogger().setLevel(logging.INFO)
 
 # choose your agent or provide a new agent
-agent_args = [AGENT_4o_MINI]
+agent_args = [AGENT_5_PLANNER]
 # agent_args = [AGENT_4o]
 
 

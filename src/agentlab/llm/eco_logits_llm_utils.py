@@ -51,5 +51,5 @@ def retry(
                 msg = f"Query failed. Retrying {tries}/{n_retry}.\n[LLM]:\n{answer['content']}\n[User]:\n{str(parsing_error)}"
                 logging.info(msg)
             messages.append(dict(role="user", content=str(parsing_error)))
-
+            
     raise ParseError(f"Could not parse a valid value after {n_retry} retries.")

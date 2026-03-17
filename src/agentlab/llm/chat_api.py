@@ -281,6 +281,7 @@ class ChatModel(AbstractChatModel):
         self.retries = 0
         self.success = False
         self.error_types = []
+        print(messages) # TODO fix
 
         completion = None
         e = None

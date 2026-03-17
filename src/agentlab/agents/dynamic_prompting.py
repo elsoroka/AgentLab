@@ -475,6 +475,36 @@ actions. Take the time to explore the effect of safe actions first. For example
 you can fill a few elements of a form, but don't click submit before verifying
 that everything was filled correctly.\n"""
 
+class PlannerGoalInstructions(PromptElement):
+    def __init__(self, goal_object, visible: bool = True, extra_instructions=None) -> None:
+        super().__init__(visible)
+        self._prompt = [
+            dict(
+                type="text",
+                text=f"""\
+# Instructions
+Use the provided Python functions to write a plan in Python code to reach the goal. Do not solve the task yourself; only write the plan. Write a simple plan without considering edge cases.
+
+## Goal:
+""",
+            )
+        ]
+
+        self._prompt += goal_object
+
+        if extra_instructions:
+            self._prompt += [
+                dict(
+                    type="text",
+                    text=f"""
+
+## Extra instructions:
+
+{extra_instructions}
+""",
+                )
+            ]
+
 
 class GoalInstructions(PromptElement):
     def __init__(self, goal_object, visible: bool = True, extra_instructions=None) -> None:
@@ -562,6 +592,9 @@ sometimes you need to use select_option, while other times you need to use fill
 or click and wait for the reaction of the page.
 """
 
+class PlannerSystemPromptElement(PromptElement):
+    _prompt = """\
+You are an expert planner. Your task is to write a plan in Python code to automate a web interaction task. Do not solve the task yourself: only write the plan."""
 
 class SystemPrompt(PromptElement):
     _prompt = """\
@@ -572,11 +605,11 @@ submit an action it will be sent to the browser and you will receive a new page.
 
 class ActionPrompt(PromptElement):
 
-    _concrete_ex = """
-<action>
-click('a324')
-</action>
-"""
+    #_concrete_ex = """
+#<action>
+#click('a324')
+#</action>
+#"""
 
     def __init__(self, action_set: AbstractActionSet, action_flags: ActionFlags) -> None:
         super().__init__()
@@ -638,6 +671,51 @@ elements in the page is through bid which are specified in your observations.
             )
 
         return ans_dict
+
+
+class PlannerActionPromptElement(ActionPrompt):
+
+    _concrete_ex = """Example: Make a plan to find the cheapest offer for Product P.
+<plan>
+stores = ["http://localhost:8081/", "http://localhost:8082/", "http://localhost:8083/", "http://localhost:8084/"]
+results = []
+
+for store in stores:
+    url_or_none = search_for_page(store, "Product P") # Return the product page URL or None if not found
+    if url_or_none is not None:
+        price = extract_information_from_page("Lowest price of the product")
+        results.append((url_or_none, price))
+
+selected_url = min(results, key=lambda x: x[1])[0]
+
+open_page("http://localhost:3000/")
+fill_text_field("Solution field", selected_url)
+press_button("Submit Final Result")
+</plan>
+"""
+
+    def __init__(self, action_set: AbstractActionSet, action_flags: ActionFlags) -> None:
+        super().__init__(action_set, action_flags)
+        self.action_set = action_set
+        self.action_flags = action_flags
+        action_set_generic_info = """
+# Functions::
+Your plan should make use of the following Python functions to interact with a web browser. Assume these functions handle all edge cases and error checking internally.
+"""
+        action_description = action_set.describe(
+            with_long_description=action_flags.long_description,
+            with_examples=action_flags.individual_examples,
+        )
+        self._prompt = (
+            f"# Action space:\n{action_set_generic_info}{action_description}{MacNote().prompt}\n"
+        )
+        self._abstract_ex = f"""
+<action>
+{self.action_set.example_action(abstract=True)}
+</action>
+"""
+
+        self._prompt += "\n" + self._concrete_ex
 
 
 # def make_action_set(action_flags: ActionFlags) -> AbstractActionSet:

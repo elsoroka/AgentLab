@@ -10,6 +10,8 @@ from agentlab.llm.eco_logits_llm_configs import CHAT_MODEL_ARGS_DICT
 
 from .generic_agent import GenericAgentArgs
 from .generic_agent_prompt import GenericPromptFlags
+from .planner_agent_prompt import PlannerPromptFlags
+from .planning_agent import PlanningAgentArgs
 
 FLAGS_CUSTOM = GenericPromptFlags(
     obs=dp.ObsFlags(
@@ -343,5 +345,11 @@ DEFAULT_RS_FLAGS = GenericPromptFlags(
 
 RANDOM_SEARCH_AGENT = GenericAgentArgs(
     chat_model_args=CHAT_MODEL_ARGS_DICT["openai/gpt-4o-2024-05-13"],
+    flags=DEFAULT_RS_FLAGS,
+)
+
+AGENT_5_PLANNER = PlanningAgentArgs(
+    planner_model_args=CHAT_MODEL_ARGS_DICT["openai/gpt-5-2025-08-07"],
+    executor_model_args=CHAT_MODEL_ARGS_DICT["openai/gpt-4o-2024-05-13"],
     flags=DEFAULT_RS_FLAGS,
 )

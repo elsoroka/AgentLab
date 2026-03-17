@@ -277,6 +277,7 @@ class ChatModelEcoLogits(AbstractChatModel):
 
     def __call__(self, messages: list[dict], n_samples: int = 1, temperature: float = None) -> dict:
         # Initialize retry tracking attributes
+        print("messages: ", messages)
         self.retries = 0
         self.success = False
         self.error_types = []
