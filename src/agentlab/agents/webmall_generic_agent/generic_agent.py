@@ -25,8 +25,6 @@ from agentlab.llm.tracking import cost_tracker_decorator
 from agentlab.llm.eco_logits_llm_utils import retry
 
 from .generic_agent_prompt import GenericPromptFlags, MainPrompt
-from functools import partial
-
 
 @dataclass
 class GenericAgentArgs(AgentArgs):

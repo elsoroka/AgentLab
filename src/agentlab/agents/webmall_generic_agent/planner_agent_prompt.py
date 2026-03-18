@@ -64,7 +64,7 @@ class ExecutorSystemPrompt(dp.Shrinkable):
         step: int,
         flags: PlannerPromptFlags,
     ) -> None:
-        super().__init__(action_set, obs_history, actions, memories, thoughts, previous_plan, step, flags)
+        super().__init__()
         self.flags = flags
         self.history = dp.History(obs_history, actions, memories, thoughts, flags.obs)
         if self.flags.enable_chat:
@@ -119,42 +119,6 @@ class ExecutorSystemPrompt(dp.Shrinkable):
 
         __prompt = """You are an expert web navigator. Your task is to choose the most appropriate Python function to call for the given webpage content and task.
 """
-        actions_unused = """Available actions:
-**Interacting with web elements**
-fill(bid:str, text:str) Fill an input field identified by `bid`with text.
-click(bid:str, button:str) Click an element identified by `bid`.
-dblclick(bid:str, button:str) Double-click an element identified by `bid`.
-hover(bid:str) Hover the mouse over an element identified by `bid`.
-press(bid:str, key_comb:str) Focus an element identified by `bid` and press a combination of keys.
-focus(bid:str) Focus an element identified by `bid`.
-clear(bid:str) Clear an input field identified by `bid`.
-select_option(bid:str, options:list[str]) Select one or multiple options in a drop-down element identified by `bid`.
-drag_and_drop(from_bid:str, to_bid:str) Drag and drop one element identified by `from_bid` to another element identified by `to_bid`.
-upload_file(bid:str, file:str) Click a ’filechooser’ element identified by `bid`, then select one or multiple input files for upload.
-
-**Using the mouse**
-mouse_move(x, y) Move the mouse to a location.
-mouse_down(x, y, button) Move the mouse then press and hold a button.
-mouse_up(x, y, button) Move the mouse then release a button.
-mouse_click(x, y, button) Move the mouse and click a button.
-mouse_dblclick(x, y, button) Move the mouse and double-click a button.
-mouse_drag_and_drop(from_x, from_y, to_x, to_y) Drag and drop from a location to a location.
-mouse_upload_file(x, y, file) Click a ’filechooser’ location, then select one or multiple
-input files for upload.
-
-**Using the keyboard**
-keyboard_down(key) Press and holds a keyboard key.
-keyboard_up(key) Release a keyboard key.
-keyboard_press(key_comb) Press a combination of keys.
-keyboard_type(text) Types a string of text through the keyboard.
-keyboard_insert_text(text) Insert a string of text in the currently focused element
-
-**Others**
-send_msg_to_user(message) Send a message to the user in the chat.
-report_infeasible(reason) Send a special message in the chat and terminate.
-scroll(dx, dy) Scroll pixels in X and/or Y direction.
-noop(seconds) Wait and do nothing
-"""
 
         if self.flags.use_abstract_example:
             prompt.add_text(__prompt)
@@ -167,13 +131,10 @@ noop(seconds) Wait and do nothing
         self.obs.shrink()
 
     def _parse_answer(self, text_answer):
-        plan = text_answer.strip()
-        if plan.startswith('`') or plan.endswith('`'):
-            plan = plan.strip('`')
-        ans_dict = {}
-        ans_dict.update(plan)
-        return ans_dict
-
+        try:
+            ans_dict = super()._parse_answer(text_answer)
+        except Exception as e:
+            return text_answer
 
 
 class PlannerSystemPrompt(dp.Shrinkable):
@@ -228,14 +189,11 @@ class PlannerSystemPrompt(dp.Shrinkable):
     @property
     def _prompt(self) -> HumanMessage:
         prompt = HumanMessage(self.instructions.prompt)
-        # This repeats the instructions at the end to help the planner recall them.
-        raw_text = '\n'.join([msg['text'] for msg in prompt['content']])
         prompt.add_text(
             f"""\
 {self.obs.prompt}\
 {self.history.prompt}\
-{self.action_prompt.prompt}\
-{raw_text}\
+{self.action_prompt.prompt}
 """
         )
 

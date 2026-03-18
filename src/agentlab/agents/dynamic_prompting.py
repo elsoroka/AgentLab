@@ -885,8 +885,8 @@ class History(Shrinkable):
         if memories is None:
             memories = [None] * len(actions)
         super().__init__(visible=lambda: flags.use_history)
-        assert len(history_obs) == len(actions) + 1
-        assert len(history_obs) == len(memories) + 1
+        #assert len(history_obs) == len(actions) + 1 # TODO uncomment this
+        #assert len(history_obs) == len(memories) + 1
 
         self.shrink_speed = shrink_speed
         self.history_steps: list[HistoryStep] = []

@@ -11,8 +11,21 @@ the agent, including model arguments and flags for various behaviors.
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from warnings import warn
-import traceback
+import functools
+import logging
 import bgym
+
+logger = logging.getLogger(__name__)
+# logger config to allow debug messages
+logging.basicConfig(level=logging.DEBUG)
+# allow messages from threads
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
 from browsergym.experiments.agent import Agent, AgentInfo
 from browsergym.experiments.benchmark.configs import DEFAULT_HIGHLEVEL_ACTION_SET_ARGS
 from agentlab.agents import dynamic_prompting as dp
@@ -20,7 +33,16 @@ from .planner_agent_prompt import PlannerSystemPrompt, ExecutorSystemPrompt, Pla
 from agentlab.agents.agent_args import AgentArgs
 from agentlab.llm.chat_api import BaseModelArgs
 from agentlab.llm.llm_utils import Discussion, ParseError, SystemMessage, HumanMessage
-
+from .executor_prompts import (
+    search_on_page_prompt,
+    navigate_to_page_prompt,
+    extract_information_from_page_prompt,
+    fill_text_field_prompt,
+    press_button_prompt,
+    select_option_prompt,
+    add_to_cart_prompt,
+    checkout_prompt,
+)
 from agentlab.llm.tracking import cost_tracker_decorator
 
 from agentlab.llm.llm_utils import retry
@@ -113,7 +135,16 @@ class PlanningAgent(Agent):
 
         # Executor management
         self.action_queue = Queue()
-        self.observation_queue = Queue()
+        self.observation_queue = Queue()   
+        self.actions.append(None) # TODO remove
+
+        # action things
+        self.navigate_to_page = functools.partial(self.generic_action, task_prompt=navigate_to_page_prompt)
+        self.extract_information_from_page = functools.partial(self.generic_action, task_prompt=extract_information_from_page_prompt)
+        self.fill_text_field = functools.partial(self.generic_action, task_prompt=fill_text_field_prompt)
+        self.press_button = functools.partial(self.generic_action, task_prompt=press_button_prompt)
+        self.select_option = functools.partial(self.generic_action, task_prompt=select_option_prompt)
+        self.checkout = functools.partial(self.generic_action, task_prompt=checkout_prompt)
 
     def obs_preprocessor(self, obs: dict) -> dict:
         return self._obs_preprocessor(obs)
@@ -163,6 +194,7 @@ class PlanningAgent(Agent):
         if self.plan is None:
             model_args = self.planner_model_args
             try:
+                
                 system_prompt = SystemMessage(dp.PlannerSystemPromptElement().prompt)
                 main_prompt = PlannerSystemPrompt(
                     self.planner_action_set,
@@ -180,7 +212,7 @@ class PlanningAgent(Agent):
                 human_prompt = dp.fit_tokens(
                     shrinkable=main_prompt,
                     max_prompt_tokens=max_prompt_tokens,
-                    model_name=self.executor_model_args.model_name,
+                    model_name=self.planner_model_args.model_name,
                     max_iterations=max_trunc_itr,
                     additional_prompts=[],
                 )
@@ -191,47 +223,73 @@ class PlanningAgent(Agent):
                     n_retry=self.max_retry,
                     parser=main_prompt._parse_answer,
                 )
-                print("ans_dict: ", ans_dict)
-                
+                logger.debug("ans_dict: %s", ans_dict)
+
                 stats = self.planner_llm.get_stats()
-                self.plan = ans_dict["plan"].split("<plan>")[1].split("</plan>")[0]
+                if "<plan>" in ans_dict["plan"]:
+                    self.plan = ans_dict["plan"].split("<plan>")[1].split("</plan>")[0]
+                else:
+                    self.plan = ans_dict["plan"]
+
                 self.plan_step = 0
-                print("plan: ", self.plan)
+                logger.info("plan: %s", self.plan)
                 planner_stats = self.planner_llm.get_stats()
                 planner_stats["n_retry"] = self.max_retry + 1
                 planner_stats["busted_retry"] = 1
+                model_args = self.planner_model_args
+
+                self.plan_step = ans_dict.get("step", self.plan_step)
+                #self.actions.append(ans_dict.get("action", None))
+                self.memories.append(ans_dict.get("memory", None))
+                self.thoughts.append(ans_dict.get("think", None))
+
+                agent_info = AgentInfo(
+                    think=ans_dict.get("think", None),
+                    chat_messages=chat_messages,
+                    stats=stats,
+                    extra_info={"planner_stats": planner_stats, "chat_model_args": asdict(model_args), #"eco_logits": eco_impacts.dict()
+                    },
+                )
+
+                self.last_agent_info = agent_info
+
                 # launch the plan in a thread
                 self.executor_thread_pool = ThreadPoolExecutor(max_workers=1)
+                
                 def tmp(plan:str):
-                    # pass in the queues as globals
+                    try:
+                        exec(plan, {
+                            "action_queue": self.action_queue,
+                            "observation_queue": self.observation_queue,
+                            "noop": self.noop,
+                            "search_on_page": self.search_on_page,
+                            "open_page": self.open_page,
+                            "close_page":self.close_page,
+                            "go_back":self.go_back,
+                            "go_forward":self.go_forward,
+                            "navigate_to_page":self.navigate_to_page,
+                            "extract_information_from_page":self.extract_information_from_page,
+                            "fill_text_field":self.fill_text_field,
+                            "press_button":self.press_button,
+                            "select_option":self.select_option,
+                            "generic_action":self.generic_action,
+                            "add_to_cart":self.add_to_cart,
+                            "checkout":self.checkout,
+                        })
+                    except Exception as e:
+                        logger.exception("Exception in executor: %s", e)
 
-                    exec(plan, globals={
-                        "action_queue": self.action_queue,
-                        "observation_queue": self.observation_queue,
-                        "noop": self.noop_action,
-                        "search_for_page": self.search_for_page,
-                        "open_page": self.open_page,
-                        "close_page":self.close_page,
-                        "go_back":self.go_back,
-                        "go_forward":self.go_forward,
-                        "navigate_to_page":self.navigate_to_page,
-                        "extract_information_from_page":self.extract_information_from_page,
-                        "fill_text_field":self.fill_text_field,
-                        "press_button":self.press_button,
-                        "select_option":self.select_option,
-                        "generic_action":self.generic_action,
-                        "add_to_cart":self.add_to_cart,
-                        "checkout":self.checkout,
-                    })
-
-                    self.action_queue.put("DONE")
+                    finished_action = {
+                        "action": "noop()",
+                        "n_retry": 0,
+                        "busted_retry": 0,
+                    }
+                    self.action_queue.put((finished_action, None))
 
                 self.executor_thread_pool.submit(tmp, self.plan)
                 
             except Exception as e:
-                print("Exception: ", e)
-                # print the traceback
-                print(traceback.format_exc())
+                logger.exception("Exception in planner: %s", e)
                 ans_dict = dict(
                     action=None,
                     n_retry=self.max_retry + 1,
@@ -239,29 +297,19 @@ class PlanningAgent(Agent):
                 )
                 
 
-        # Now the plan is running, so we get an action from the threaded executor 
-        print("Entering a blocking queue.get()")
-        ans_dict = self.action_queue.get()
-        self.plan_step += 1
-        model_args = self.executor_model_args
-        stats = self.executor_llm.get_stats()
+        # Now the plan is running, so we get an action from the threaded executor
+        logger.debug("mainloop: entering a blocking action_queue.get()")
+        result = self.action_queue.get()
+        logger.debug("mainloop: action_queue.get() result: %s", result)
+    
+        ans_dict, agent_info = result
 
-        stats["n_retry"] = ans_dict["n_retry"]
-        stats["busted_retry"] = ans_dict["busted_retry"]
-
-        self.plan = ans_dict.get("plan", self.plan)
-        self.plan_step = ans_dict.get("step", self.plan_step)
-        self.actions.append(ans_dict["action"])
+        self.actions.append(ans_dict.get("action", None))
         self.memories.append(ans_dict.get("memory", None))
         self.thoughts.append(ans_dict.get("think", None))
 
-        agent_info = AgentInfo(
-            think=ans_dict.get("think", None),
-            chat_messages=chat_messages,
-            stats=stats,
-            extra_info={"planner_stats": planner_stats, "chat_model_args": asdict(model_args), #"eco_logits": eco_impacts.dict()
-            },
-        )
+        self.plan_step += 1
+
         return ans_dict["action"], agent_info
 
     def reset(self, seed=None):
@@ -308,5 +356,160 @@ does not support vision. Disabling use_screenshot."""
         return max_prompt_tokens, max_trunc_itr
 
 
+    # The executor runs in a thread
+    # note: ignore potentialconcurrency issues for now, we will fix them later.
     # Here is where we define the executor actions.
+    def noop(self):
+        # make ans_dict
+        ans_dict = {
+            "action": "noop()",
+            "n_retry": 0,
+            "busted_retry": 0,
+        }
+        self.action_queue.put((ans_dict, self.last_agent_info))
+        return None
+
+    def go_back(self):
+        ans_dict = {
+            "action": "go_back()",
+            "n_retry": 0,
+            "busted_retry": 0,
+        }
+        self.action_queue.put((ans_dict, self.last_agent_info))
+        logger.debug("put in queue: %s", ans_dict)
+        #logger.debug("Entering blocking observation queue.get()")
+        #obs = self.observation_queue.get()
+#        logger.debug("obs: %s", obs)
+        return None
+
+    def go_forward(self):
+        ans_dict = {
+            "action": "go_forward()",
+            "n_retry": 0,
+            "busted_retry": 0,
+        }
+        self.action_queue.put((ans_dict, self.last_agent_info))
+        logger.debug("put in queue: %s", ans_dict)
+ #       logger.debug("Entering blocking observation queue.get()")
+        #obs = self.observation_queue.get()
+#        logger.debug("obs: %s", obs)
+        return None
+
+    def open_page(self, url:str):
+        ans_dict = {
+            "action": f"open_page('{url}')",
+            "n_retry": 0,
+            "busted_retry": 0,
+        }
+        self.action_queue.put((ans_dict, self.last_agent_info))
+        logger.debug("put in queue: %s", ans_dict)
+ #       logger.debug("Entering blocking observation queue.get()")
+        #obs = self.observation_queue.get()
+#        logger.debug("obs: %s", obs)
+        return None
+
+    def close_page(self):
+        ans_dict = {
+            "action": "close_page()",
+            "n_retry": 0,
+            "busted_retry": 0,
+        }
+        self.action_queue.put((ans_dict, self.last_agent_info))
+        logger.debug("put in queue: %s", ans_dict)
+        
+ #       obs = self.observation_queue.get()
+        #logger.debug("obs: %s", obs)
+        return None
     
+    def search_on_page(self, url:str, search_text:str):
+        self.open_page(url)
+        logger.debug("Entering blocking observation queue.get()")
+        obs = self.observation_queue.get()
+        #logger.debug("obs: %s", obs)
+        return self.generic_action(task_prompt=search_on_page_prompt(search_text))
+
+
+    def add_to_cart(self, url:str, item_description:str):
+        self.open_page(url)
+        logger.debug("Entering blocking observation queue.get()")
+        obs = self.observation_queue.get()
+        #logger.debug("obs: %s", obs)
+        return self.generic_action(task_prompt=add_to_cart_prompt(item_description))
+
+
+    def generic_action(self, *args, **kwargs):
+        n_steps = 0
+        while n_steps < 10:
+            logger.debug(f"generic_action step {n_steps}: Entering blocking observation queue.get()")
+            obs = self.observation_queue.get()
+            #logger.debug("obs: %s", obs)
+            n_steps += 1
+            
+            task_prompt_text = kwargs.get("task_prompt", "")
+            kwargs_copy = deepcopy(kwargs)
+            kwargs_copy.pop("task_prompt")
+            logger.debug("task_prompt: %s", task_prompt_text)
+            # this forces the task prompt to be the last message in the chat history
+            #self.obs_history.append({"chat_messages": [{"role": "user", "text": task_prompt_text}]})
+
+            logger.debug("args: %s", args)
+            logger.debug("kwargs: %s", kwargs)
+            system_prompt = SystemMessage(dp.SystemPrompt().prompt)
+            logger.debug(f"actions: {len(self.actions)}")
+            logger.debug(f"observation history: {len(self.obs_history)}")
+            for obs in self.obs_history:
+                logger.debug(" ".join(obs.keys()))
+
+            main_prompt = ExecutorSystemPrompt(
+                    self.executor_action_set,
+                    obs_history=self.obs_history,
+                    actions=self.actions,
+                    memories=self.memories,
+                    thoughts=self.thoughts,
+                    previous_plan=self.plan,
+                    step=self.plan_step,
+                    flags=self.flags,
+                    )
+
+            max_prompt_tokens, max_trunc_itr = self._get_maxes()
+
+            human_prompt = dp.fit_tokens(
+                shrinkable=main_prompt,
+                max_prompt_tokens=max_prompt_tokens,
+                model_name=self.executor_model_args.model_name,
+                max_iterations=max_trunc_itr,
+                additional_prompts=[f"\n<your task>\n{task_prompt_text}\n</your task>"],
+            )
+            chat_messages = Discussion([system_prompt, human_prompt])
+            ans_dict = retry(
+                self.planner_llm,
+                chat_messages,
+                n_retry=self.max_retry,
+                parser=main_prompt._parse_answer,
+            )
+            if type(ans_dict) == str:
+                # this means we finished with the subtask
+                return ans_dict    
+            
+            model_args = self.executor_model_args
+            #stats = self.executor_llm.get_stats()
+
+    #        stats["n_retry"] = 0
+            #stats["busted_retry"] = ans_dict["busted_retry"]
+
+            self.plan = ans_dict.get("plan", self.plan)
+            self.plan_step = ans_dict.get("step", self.plan_step)
+
+            agent_info = AgentInfo(
+                think=ans_dict.get("think", None),
+                chat_messages=chat_messages,
+            #    stats=stats,
+                extra_info={"chat_model_args": asdict(model_args),# "eco_logits": eco_impacts.dict()
+                },
+            )
+            self.last_agent_info = agent_info
+            self.action_queue.put((ans_dict, agent_info))
+            logger.debug("put in queue: %s %s", ans_dict, agent_info)
+        
+        return "Failure"
+
