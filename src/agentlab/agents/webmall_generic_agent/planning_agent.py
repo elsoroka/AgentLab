@@ -397,7 +397,14 @@ does not support vision. Disabling use_screenshot."""
 
     def open_page(self, url:str):
         ans_dict = {
-            "action": f"open_page('{url}')",
+            "action": "new_tab()",
+            "n_retry": 0,
+            "busted_retry": 0,
+        }
+        self.action_queue.put((ans_dict, self.last_agent_info))
+        logger.debug("put in queue: %s", ans_dict)
+        ans_dict = {
+            "action": f"goto('{url}')",
             "n_retry": 0,
             "busted_retry": 0,
         }
@@ -410,7 +417,7 @@ does not support vision. Disabling use_screenshot."""
 
     def close_page(self):
         ans_dict = {
-            "action": "close_page()",
+            "action": "tab_close()",
             "n_retry": 0,
             "busted_retry": 0,
         }
@@ -441,7 +448,10 @@ does not support vision. Disabling use_screenshot."""
         n_steps = 0
         while n_steps < 10:
             logger.debug(f"generic_action step {n_steps}: Entering blocking observation queue.get()")
-            obs = self.observation_queue.get()
+            while not self.observation_queue.empty():
+                obs = self.observation_queue.get()
+                logger.debug("retrieved observation from queue: %s", obs, "queue is empty: %s", self.observation_queue.empty())
+                self.obs_history.append(obs)
             #logger.debug("obs: %s", obs)
             n_steps += 1
             
@@ -457,8 +467,6 @@ does not support vision. Disabling use_screenshot."""
             system_prompt = SystemMessage(dp.SystemPrompt().prompt)
             logger.debug(f"actions: {len(self.actions)}")
             logger.debug(f"observation history: {len(self.obs_history)}")
-            for obs in self.obs_history:
-                logger.debug(" ".join(obs.keys()))
 
             main_prompt = ExecutorSystemPrompt(
                     self.executor_action_set,
@@ -482,11 +490,12 @@ does not support vision. Disabling use_screenshot."""
             )
             chat_messages = Discussion([system_prompt, human_prompt])
             ans_dict = retry(
-                self.planner_llm,
+                self.executor_llm,
                 chat_messages,
                 n_retry=self.max_retry,
                 parser=main_prompt._parse_answer,
             )
+            logger.debug("generic_action: ans_dict: %s", ans_dict)
             if type(ans_dict) == str:
                 # this means we finished with the subtask
                 return ans_dict    
@@ -496,9 +505,6 @@ does not support vision. Disabling use_screenshot."""
 
     #        stats["n_retry"] = 0
             #stats["busted_retry"] = ans_dict["busted_retry"]
-
-            self.plan = ans_dict.get("plan", self.plan)
-            self.plan_step = ans_dict.get("step", self.plan_step)
 
             agent_info = AgentInfo(
                 think=ans_dict.get("think", None),

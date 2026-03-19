@@ -11,6 +11,7 @@ from browsergym.core import action
 from browsergym.core.action.base import AbstractActionSet
 
 from agentlab.agents import dynamic_prompting as dp
+from agentlab.agents.webmall_generic_agent.generic_agent_prompt import MainPrompt
 from agentlab.llm.llm_utils import HumanMessage, parse_html_tags_raise
 
 
@@ -52,7 +53,7 @@ class PlannerPromptFlags(dp.Flags):
     flag_group: str = None
 
 
-class ExecutorSystemPrompt(dp.Shrinkable):
+class ExecutorSystemPrompt(MainPrompt):
     def __init__(
         self,
         action_set: AbstractActionSet,
@@ -64,7 +65,7 @@ class ExecutorSystemPrompt(dp.Shrinkable):
         step: int,
         flags: PlannerPromptFlags,
     ) -> None:
-        super().__init__()
+        super().__init__(action_set, obs_history, actions, memories, thoughts, previous_plan, step, flags)
         self.flags = flags
         self.history = dp.History(obs_history, actions, memories, thoughts, flags.obs)
         if self.flags.enable_chat:

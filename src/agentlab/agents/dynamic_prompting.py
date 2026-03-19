@@ -8,6 +8,17 @@ from textwrap import dedent
 from typing import Literal
 from warnings import warn
 
+logger = logging.getLogger(__name__)
+# logger config to allow debug messages
+logging.basicConfig(level=logging.DEBUG)
+# allow messages from threads
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
 import bgym
 from bgym import HighLevelActionSetArgs
 from browsergym.core.action.base import AbstractActionSet
@@ -641,14 +652,18 @@ elements in the page is through bid which are specified in your observations.
     # """
 
     def _parse_answer(self, text_answer):
+        logger.debug("_parse_answer", text_answer)
         try:
             ans_dict = parse_html_tags_raise(text_answer, keys=["action"], merge_multiple=True)
         except ParseError as e:
+            logger.debug("_parse_answer ParseError", e)
             if self.action_flags.is_strict:
                 raise e
             else:
+                logger.debug("_parse_answer extract_code_blocks")
                 # try to extract code blocks
                 blocks = extract_code_blocks(text_answer)
+                logger.debug("_parse_answer blocks", blocks)
                 if len(blocks) == 0:
                     raise e
                 else:
@@ -656,20 +671,24 @@ elements in the page is through bid which are specified in your observations.
                     ans_dict = {"action": code, "parse_error": str(e)}
 
         try:
+            logger.debug("_parse_answer ans_dict", ans_dict)
             if ans_dict["action"] == "None":
                 # Used by reproducibility agent for backward compatibility of
                 # traces missing LLM's response in chat messages.
-                ans_dict["action"] = None
+                #ans_dict["action"] = None
+                pass
             else:
                 # just check if action can be mapped to python code but keep action as is
                 # the environment will be responsible for mapping it to python
                 self.action_set.to_python_code(ans_dict["action"])
         except Exception as e:
+            logger.debug("_parse_answer Exception 2", e)
             raise ParseError(
                 f"Error while parsing action\n: {e}\n"
                 "Make sure your answer is restricted to the allowed actions."
             )
 
+        logger.debug("_parse_answer returning", ans_dict)
         return ans_dict
 
 
