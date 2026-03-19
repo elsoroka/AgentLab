@@ -131,12 +131,6 @@ class ExecutorSystemPrompt(MainPrompt):
         self.history.shrink()
         self.obs.shrink()
 
-    def _parse_answer(self, text_answer):
-        try:
-            ans_dict = super()._parse_answer(text_answer)
-        except Exception as e:
-            return text_answer
-
 
 class PlannerSystemPrompt(dp.Shrinkable):
     def __init__(
@@ -158,10 +152,10 @@ class PlannerSystemPrompt(dp.Shrinkable):
                 obs_history[-1]["chat_messages"], extra_instructions=flags.extra_instructions
             )
         else:
-            if sum([msg["role"] == "user" for msg in obs_history[-1].get("chat_messages", [])]) > 1:
-                logging.warning(
-                    "Agent is in goal mode, but multiple user messages are present in the chat. Consider switching to `enable_chat=True`."
-                )
+            #if sum([msg["role"] == "user" for msg in obs_history[-1].get("chat_messages", [])]) > 1:
+                #logging.warning(
+                    #"Agent is in goal mode, but multiple user messages are present in the chat. Consider switching to `enable_chat=True`."
+                #)
             self.instructions = dp.PlannerGoalInstructions(
                 obs_history[-1]["goal_object"], extra_instructions=flags.extra_instructions
             )

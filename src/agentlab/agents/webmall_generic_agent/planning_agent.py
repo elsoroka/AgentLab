@@ -10,6 +10,7 @@ the agent, including model arguments and flags for various behaviors.
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+import time
 from warnings import warn
 import functools
 import logging
@@ -136,7 +137,7 @@ class PlanningAgent(Agent):
         # Executor management
         self.action_queue = Queue()
         self.observation_queue = Queue()   
-        self.actions.append(None) # TODO remove
+        #self.actions.append(None) # TODO remove
 
         # action things
         self.navigate_to_page = functools.partial(self.generic_action, task_prompt=navigate_to_page_prompt)
@@ -182,8 +183,8 @@ class PlanningAgent(Agent):
 
     @cost_tracker_decorator
     def get_action(self, obs):
-        self.obs_history.append(obs)
         self.observation_queue.put(obs)
+        self.obs_history.append(obs)
 
         ans_dict = dict()
         stats = dict()
@@ -224,7 +225,6 @@ class PlanningAgent(Agent):
                     parser=main_prompt._parse_answer,
                 )
                 logger.debug("ans_dict: %s", ans_dict)
-
                 stats = self.planner_llm.get_stats()
                 if "<plan>" in ans_dict["plan"]:
                     self.plan = ans_dict["plan"].split("<plan>")[1].split("</plan>")[0]
@@ -240,8 +240,8 @@ class PlanningAgent(Agent):
 
                 self.plan_step = ans_dict.get("step", self.plan_step)
                 #self.actions.append(ans_dict.get("action", None))
-                self.memories.append(ans_dict.get("memory", None))
-                self.thoughts.append(ans_dict.get("think", None))
+                #self.memories.append(ans_dict.get("memory", None))
+                #self.thoughts.append(ans_dict.get("think", None))
 
                 agent_info = AgentInfo(
                     think=ans_dict.get("think", None),
@@ -377,9 +377,6 @@ does not support vision. Disabling use_screenshot."""
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
         logger.debug("put in queue: %s", ans_dict)
-        #logger.debug("Entering blocking observation queue.get()")
-        #obs = self.observation_queue.get()
-#        logger.debug("obs: %s", obs)
         return None
 
     def go_forward(self):
@@ -390,9 +387,6 @@ does not support vision. Disabling use_screenshot."""
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
         logger.debug("put in queue: %s", ans_dict)
- #       logger.debug("Entering blocking observation queue.get()")
-        #obs = self.observation_queue.get()
-#        logger.debug("obs: %s", obs)
         return None
 
     def open_page(self, url:str):
@@ -410,9 +404,6 @@ does not support vision. Disabling use_screenshot."""
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
         logger.debug("put in queue: %s", ans_dict)
- #       logger.debug("Entering blocking observation queue.get()")
-        #obs = self.observation_queue.get()
-#        logger.debug("obs: %s", obs)
         return None
 
     def close_page(self):
@@ -423,24 +414,15 @@ does not support vision. Disabling use_screenshot."""
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
         logger.debug("put in queue: %s", ans_dict)
-        
- #       obs = self.observation_queue.get()
-        #logger.debug("obs: %s", obs)
         return None
     
     def search_on_page(self, url:str, search_text:str):
         self.open_page(url)
-        logger.debug("Entering blocking observation queue.get()")
-        obs = self.observation_queue.get()
-        #logger.debug("obs: %s", obs)
         return self.generic_action(task_prompt=search_on_page_prompt(search_text))
 
 
     def add_to_cart(self, url:str, item_description:str):
         self.open_page(url)
-        logger.debug("Entering blocking observation queue.get()")
-        obs = self.observation_queue.get()
-        #logger.debug("obs: %s", obs)
         return self.generic_action(task_prompt=add_to_cart_prompt(item_description))
 
 
@@ -448,10 +430,15 @@ does not support vision. Disabling use_screenshot."""
         n_steps = 0
         while n_steps < 10:
             logger.debug(f"generic_action step {n_steps}: Entering blocking observation queue.get()")
-            while not self.observation_queue.empty():
+            # wait for previous actions to be consumed in the main thread
+            while self.action_queue.qsize() > 0:
+                time.sleep(1.0)
+            while True:
                 obs = self.observation_queue.get()
-                logger.debug("retrieved observation from queue: %s", obs, "queue is empty: %s", self.observation_queue.empty())
-                self.obs_history.append(obs)
+                logger.debug("retrieved observation from queue, queue is empty: %s", self.observation_queue.empty())
+                #self.obs_history.append(obs)
+                if self.observation_queue.empty():
+                    break
             #logger.debug("obs: %s", obs)
             n_steps += 1
             
@@ -467,6 +454,10 @@ does not support vision. Disabling use_screenshot."""
             system_prompt = SystemMessage(dp.SystemPrompt().prompt)
             logger.debug(f"actions: {len(self.actions)}")
             logger.debug(f"observation history: {len(self.obs_history)}")
+            for a in self.actions:
+                logger.debug(f"action: {str(a)[0:20]}")
+            for o in self.obs_history:
+                logger.debug(f"observation: {str(o)[0:20]}")
 
             main_prompt = ExecutorSystemPrompt(
                     self.executor_action_set,
@@ -488,29 +479,35 @@ does not support vision. Disabling use_screenshot."""
                 max_iterations=max_trunc_itr,
                 additional_prompts=[f"\n<your task>\n{task_prompt_text}\n</your task>"],
             )
-            chat_messages = Discussion([system_prompt, human_prompt])
-            ans_dict = retry(
-                self.executor_llm,
-                chat_messages,
-                n_retry=self.max_retry,
-                parser=main_prompt._parse_answer,
-            )
-            logger.debug("generic_action: ans_dict: %s", ans_dict)
-            if type(ans_dict) == str:
-                # this means we finished with the subtask
-                return ans_dict    
-            
-            model_args = self.executor_model_args
-            #stats = self.executor_llm.get_stats()
 
-    #        stats["n_retry"] = 0
-            #stats["busted_retry"] = ans_dict["busted_retry"]
+            try:
+                chat_messages = Discussion([system_prompt, human_prompt])
+                ans_dict = retry(
+                    self.executor_llm,
+                    chat_messages,
+                    n_retry=self.max_retry,
+                    parser=main_prompt._parse_answer,
+                )
+                logger.debug("generic_action: ans_dict: %s", ans_dict)
+                ans_dict["busted_retry"] = 0
+                # inferring the number of retries, TODO: make this less hacky
+                ans_dict["n_retry"] = (len(chat_messages) - 3) / 2
+            except ParseError as e:
+                ans_dict = dict(
+                    action=None,
+                    n_retry=self.max_retry + 1,
+                    busted_retry=1,
+                )
+
+            stats = self.executor_llm.get_stats()
+            stats["n_retry"] = ans_dict["n_retry"]
+            stats["busted_retry"] = ans_dict["busted_retry"]
 
             agent_info = AgentInfo(
                 think=ans_dict.get("think", None),
                 chat_messages=chat_messages,
-            #    stats=stats,
-                extra_info={"chat_model_args": asdict(model_args),# "eco_logits": eco_impacts.dict()
+                stats=stats,
+                extra_info={"executor_model_args": asdict(self.executor_model_args),# "eco_logits": eco_impacts.dict()
                 },
             )
             self.last_agent_info = agent_info
