@@ -83,6 +83,8 @@ def retry(
     """
     tries = 0
     while tries < n_retry:
+        for m in messages:
+            print("retry:", m)
         answer = chat(messages)
         print("retry: answer: %s", answer)
         # TODO: could we change this to not use inplace modifications ?

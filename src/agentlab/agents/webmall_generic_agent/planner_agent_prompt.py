@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from browsergym.core import action
 from browsergym.core.action.base import AbstractActionSet
 
+from agentlab.agents.webmall_generic_agent.executor_prompts import PromptElement
 from agentlab.agents import dynamic_prompting as dp
 from agentlab.agents.webmall_generic_agent.generic_agent_prompt import MainPrompt
 from agentlab.llm.llm_utils import HumanMessage, parse_html_tags_raise
@@ -57,6 +58,7 @@ class ExecutorSystemPrompt(MainPrompt):
     def __init__(
         self,
         action_set: AbstractActionSet,
+        goal: PromptElement,
         obs_history: list[dict],
         actions: list[str],
         memories: list[str],
@@ -77,9 +79,7 @@ class ExecutorSystemPrompt(MainPrompt):
                 logging.warning(
                     "Agent is in goal mode, but multiple user messages are present in the chat. Consider switching to `enable_chat=True`."
                 )
-            self.instructions = dp.GoalInstructions(
-                obs_history[-1]["goal_object"], extra_instructions=flags.extra_instructions
-            )
+            self.instructions = goal
 
         self.obs = dp.Observation(
             obs_history[-1],
@@ -97,9 +97,9 @@ class ExecutorSystemPrompt(MainPrompt):
         self.be_cautious = dp.BeCautious(visible=time_for_caution)
         self.think = dp.Think(visible=lambda: flags.use_thinking)
         self.hints = dp.Hints(visible=lambda: flags.use_hints)
-        #self.plan = Plan(previous_plan, step, lambda: flags.use_plan)  # TODO add previous plan
-        #self.criticise = Criticise(visible=lambda: flags.use_criticise)
-#        self.memory = Memory(visible=lambda: flags.use_memory)
+        self.plan = Plan(previous_plan, step, lambda: flags.use_plan)  # TODO add previous plan
+        self.criticise = Criticise(visible=lambda: flags.use_criticise)
+        self.memory = Memory(visible=lambda: flags.use_memory)
 
     @property
     def _prompt(self) -> HumanMessage:
@@ -109,13 +109,12 @@ class ExecutorSystemPrompt(MainPrompt):
 {self.obs.prompt}\
 {self.history.prompt}\
 {self.action_prompt.prompt}\
+{self.be_cautious.prompt}\
+{self.think.prompt}\
+{self.plan.prompt}\
+{self.memory.prompt}\
+{self.criticise.prompt}\
 """
-#{self.be_cautious.prompt}\
-#{self.think.prompt}\
-#{self.plan.prompt}\
-#{self.memory.prompt}\
-#{self.criticise.prompt}\
-#"""
         )
 
         __prompt = """You are an expert web navigator. Your task is to choose the most appropriate Python function to call for the given webpage content and task.
@@ -152,10 +151,6 @@ class PlannerSystemPrompt(dp.Shrinkable):
                 obs_history[-1]["chat_messages"], extra_instructions=flags.extra_instructions
             )
         else:
-            #if sum([msg["role"] == "user" for msg in obs_history[-1].get("chat_messages", [])]) > 1:
-                #logging.warning(
-                    #"Agent is in goal mode, but multiple user messages are present in the chat. Consider switching to `enable_chat=True`."
-                #)
             self.instructions = dp.PlannerGoalInstructions(
                 obs_history[-1]["goal_object"], extra_instructions=flags.extra_instructions
             )

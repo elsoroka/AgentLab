@@ -31,7 +31,7 @@ BASE_FLAGS = GenericPromptFlags(
         filter_visible_elements_only=False,
     ),
     action=dp.ActionFlags(
-        multi_actions=False,
+        multi_actions=True,
         action_set="bid",
         long_description=False,
         individual_examples=False,

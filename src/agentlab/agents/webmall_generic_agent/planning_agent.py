@@ -224,7 +224,6 @@ class PlanningAgent(Agent):
                     n_retry=self.max_retry,
                     parser=main_prompt._parse_answer,
                 )
-                logger.debug("ans_dict: %s", ans_dict)
                 stats = self.planner_llm.get_stats()
                 if "<plan>" in ans_dict["plan"]:
                     self.plan = ans_dict["plan"].split("<plan>")[1].split("</plan>")[0]
@@ -300,7 +299,6 @@ class PlanningAgent(Agent):
         # Now the plan is running, so we get an action from the threaded executor
         logger.debug("mainloop: entering a blocking action_queue.get()")
         result = self.action_queue.get()
-        logger.debug("mainloop: action_queue.get() result: %s", result)
     
         ans_dict, agent_info = result
 
@@ -376,7 +374,6 @@ does not support vision. Disabling use_screenshot."""
             "busted_retry": 0,
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
-        logger.debug("put in queue: %s", ans_dict)
         return None
 
     def go_forward(self):
@@ -386,7 +383,6 @@ does not support vision. Disabling use_screenshot."""
             "busted_retry": 0,
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
-        logger.debug("put in queue: %s", ans_dict)
         return None
 
     def open_page(self, url:str):
@@ -396,14 +392,12 @@ does not support vision. Disabling use_screenshot."""
             "busted_retry": 0,
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
-        logger.debug("put in queue: %s", ans_dict)
         ans_dict = {
             "action": f"goto('{url}')",
             "n_retry": 0,
             "busted_retry": 0,
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
-        logger.debug("put in queue: %s", ans_dict)
         return None
 
     def close_page(self):
@@ -413,7 +407,6 @@ does not support vision. Disabling use_screenshot."""
             "busted_retry": 0,
         }
         self.action_queue.put((ans_dict, self.last_agent_info))
-        logger.debug("put in queue: %s", ans_dict)
         return None
     
     def search_on_page(self, url:str, search_text:str):
@@ -431,7 +424,7 @@ does not support vision. Disabling use_screenshot."""
         while n_steps < 10:
             logger.debug(f"generic_action step {n_steps}: Entering blocking observation queue.get()")
             # wait for previous actions to be consumed in the main thread
-            while self.action_queue.qsize() > 0:
+            while not self.action_queue.empty() or len(self.obs_history) == 0 or len(self.actions) >= len(self.obs_history):
                 time.sleep(1.0)
             while True:
                 obs = self.observation_queue.get()
@@ -439,7 +432,6 @@ does not support vision. Disabling use_screenshot."""
                 #self.obs_history.append(obs)
                 if self.observation_queue.empty():
                     break
-            #logger.debug("obs: %s", obs)
             n_steps += 1
             
             task_prompt_text = kwargs.get("task_prompt", "")
@@ -449,8 +441,6 @@ does not support vision. Disabling use_screenshot."""
             # this forces the task prompt to be the last message in the chat history
             #self.obs_history.append({"chat_messages": [{"role": "user", "text": task_prompt_text}]})
 
-            logger.debug("args: %s", args)
-            logger.debug("kwargs: %s", kwargs)
             system_prompt = SystemMessage(dp.SystemPrompt().prompt)
             logger.debug(f"actions: {len(self.actions)}")
             logger.debug(f"observation history: {len(self.obs_history)}")
@@ -461,6 +451,7 @@ does not support vision. Disabling use_screenshot."""
 
             main_prompt = ExecutorSystemPrompt(
                     self.executor_action_set,
+                    goal=task_prompt_text,
                     obs_history=self.obs_history,
                     actions=self.actions,
                     memories=self.memories,
@@ -469,6 +460,7 @@ does not support vision. Disabling use_screenshot."""
                     step=self.plan_step,
                     flags=self.flags,
                     )
+            logger.debug("main_prompt: %s", main_prompt.prompt)
 
             max_prompt_tokens, max_trunc_itr = self._get_maxes()
 
@@ -488,7 +480,6 @@ does not support vision. Disabling use_screenshot."""
                     n_retry=self.max_retry,
                     parser=main_prompt._parse_answer,
                 )
-                logger.debug("generic_action: ans_dict: %s", ans_dict)
                 ans_dict["busted_retry"] = 0
                 # inferring the number of retries, TODO: make this less hacky
                 ans_dict["n_retry"] = (len(chat_messages) - 3) / 2
@@ -512,7 +503,6 @@ does not support vision. Disabling use_screenshot."""
             )
             self.last_agent_info = agent_info
             self.action_queue.put((ans_dict, agent_info))
-            logger.debug("put in queue: %s %s", ans_dict, agent_info)
         
         return "Failure"
 
