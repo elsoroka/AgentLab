@@ -445,7 +445,7 @@ does not support vision. Disabling use_screenshot."""
             logger.debug(f"actions: {len(self.actions)}")
             logger.debug(f"observation history: {len(self.obs_history)}")
             for a in self.actions:
-                logger.debug(f"action: {str(a)[0:20]}")
+                logger.debug(f"Final action: {str(a)[0:20]}")
             for o in self.obs_history:
                 logger.debug(f"observation: {str(o)[0:20]}")
 
