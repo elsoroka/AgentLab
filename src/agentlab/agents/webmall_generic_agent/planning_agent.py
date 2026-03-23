@@ -10,6 +10,7 @@ the agent, including model arguments and flags for various behaviors.
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from re import S
 import time
 from warnings import warn
 import functools
@@ -50,7 +51,7 @@ from agentlab.llm.llm_utils import retry
 
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
-
+import threading
 
 @dataclass
 class PlanningAgentArgs(AgentArgs):
@@ -128,6 +129,7 @@ class PlanningAgent(Agent):
         self.flags = flags
         self.planner_action_set = self.flags.action.planner_action_set.make_action_set()
         self.executor_action_set = self.flags.action.action_set.make_action_set()
+        self.waiting_for_action = threading.Event() # event to wait for the action to be finished
 
         self._obs_preprocessor = dp.make_obs_preprocessor(self.flags.obs)
 
@@ -225,6 +227,7 @@ class PlanningAgent(Agent):
             # launch the plan in a thread
             self.executor_thread_pool = ThreadPoolExecutor(max_workers=1)
             self.executor_thread_pool.submit(self.execute_plan, self.plan)
+            self.waiting_for_action.clear()
             
         except Exception as e:
             logger.exception("Exception in planner: %s", e)
@@ -270,6 +273,9 @@ class PlanningAgent(Agent):
                 
     @cost_tracker_decorator
     def get_action(self, obs):
+        if len(self.actions) > 0:
+            self.action_queue.task_done() # corresponds to the previous action
+
         self.observation_queue.put(obs)
 
         if self.plan is None:
@@ -277,20 +283,20 @@ class PlanningAgent(Agent):
 
         # Now the plan is running, so we get an action from the threaded executor
         logger.debug("mainloop: entering a blocking action_queue.get()")
+        
+        # this flags that we are waiting for a new action to be computed
+        self.waiting_for_action.set()
         result = self.action_queue.get()
         ans_dict, agent_info = result
-
+        
         self.actions.append(ans_dict.get("action", None))
         self.memories.append(ans_dict.get("memory", None))
         self.thoughts.append(ans_dict.get("think", None))
-
 
         return ans_dict["action"], agent_info
 
     def reset(self, seed=None):
         self.seed = seed
-        self.plan = None
-        self.plan_step = -1
         self.memories = []
         self.thoughts = []
         self.actions = []
@@ -386,31 +392,177 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.put((ans_dict, self.last_agent_info))
         return None
     
+
+    def navigate_to_page(self, description:str):
+        """Navigate to a page that fits the given description. Return True if successful, False otherwise.
+
+        Examples:
+        navigate_to_page("The home page of this website.")
+        """
+        self.reset()
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
+            ans_dict["action"] = str(ans_dict["action"])
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("navigate_to_page FINISHING: %s", ans_dict["action"])
+                
+                return "report_infeasible" not in ans_dict["action"]
+            logger.debug("navigate_to_page CONTINUING: %s", ans_dict["action"])
+        return False
+    
+
+    def extract_information_from_page(self, description:str):
+        """Extract text from the current page that fits the given description. Return the text as a string.
+
+        Examples:
+        extract_information_from_page("The lowest price of the product.")
+        """
+        self.reset()
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description))
+            ans_dict["action"] = str(ans_dict["action"])
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("extract_information_from_page FINISHING: %s", ans_dict["action"])
+
+                return ans_dict["action"].split("(=")[1].split(")")[0].strip("""'" """)
+            logger.debug("extract_information_from_page CONTINUING: %s", ans_dict["action"])
+        return ''
+
+
     def search_on_page(self, url:str, search_text:str):
+        """Open the search_page_url and search for the search_text. Return the best match page URL as a string, or None if not found.
+
+        Examples:
+        search_on_page("https://www.google.com", "Python")
+        """
+        self.reset()
         self.open_page(url)
         while True:
             ans_dict, agent_info = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
+            ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("search_on_page FINISHING: %s", ans_dict["action"])
-                return ans_dict, agent_info
+
+                raw_action = ans_dict["action"]
+                if "report_result" in raw_action:
+                    # strip off ' and " and extract the report_result("result")" string
+                    return raw_action.split("(=")[1].split(")")[0].strip("""'" """)
+                else:
+                    return None
             logger.debug("search_on_page CONTINUING: %s", ans_dict["action"])
-    
+        return None
+
+
     def add_to_cart(self, url:str, item_description:str):
+        """Add the product to the cart. Return True if successful, False otherwise.
+
+        Examples:
+        add_to_cart("product_url", "The product description") # returns True because this is a product page
+        """
+        self.reset()
         self.open_page(url)
+
         while True:
             ans_dict, agent_info = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
+            ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("add_to_cart FINISHING: %s", ans_dict["action"])
-                return ans_dict, agent_info
+                logger.debug("add_to_cart FINISHING: %s", ans_dict["action"])                
+                return "report_infeasible" not in ans_dict["action"]
             logger.debug("add_to_cart CONTINUING: %s", ans_dict["action"])
+        return False
+
+    def checkout(self, payment_and_shipping_information:str):
+        """Checkout from the current page. Return True if successful, False otherwise.
+
+        Examples:
+        checkout("A string containing payment information and shipping address") # while on a web shopping site with at least one item in the cart, returns True
+        """
+        self.reset()
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=checkout_prompt(payment_and_shipping_information))
+            ans_dict["action"] = str(ans_dict["action"])
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("checkout FINISHING: %s", ans_dict["action"])
+
+                return "report_infeasible" not in ans_dict["action"]
+            logger.debug("checkout CONTINUING: %s", ans_dict["action"])
+        return False
+    
+
+    def fill_text_field(self, field_description:str, text:str)->bool:
+        """Fill the text field with the given text. Return True if successful, False otherwise.
+
+        Examples:
+        fill_text_field("The email field", "example@example.com")
+        """
+        self.reset()
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=fill_text_field_prompt(field_description, text))
+            ans_dict["action"] = str(ans_dict["action"])
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("fill_text_field FINISHING: %s", ans_dict["action"])
+
+                return "report_infeasible" not in ans_dict["action"]
+            logger.debug("fill_text_field CONTINUING: %s", ans_dict["action"])
+        return False
+    
+
+    def press_button(self, button_description:str)->bool:
+        """Press the button with the given description. Return True if successful, False otherwise.
+
+        Examples:
+        press_button("The submit button")
+        """
+        self.reset()
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=press_button_prompt(button_description))
+            ans_dict["action"] = str(ans_dict["action"])
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("press_button FINISHING: %s", ans_dict["action"])
+
+                return "report_infeasible" not in ans_dict["action"]
+            logger.debug("press_button CONTINUING: %s", ans_dict["action"])
+        return False
+
+
+    def select_option(self, option_description:str)->bool:
+        """Select the option with the given description. Return True if successful, False otherwise.
+
+        Examples:
+        select_option("Ground shipping")
+        """
+        self.reset()
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=select_option_prompt(option_description))
+            ans_dict["action"] = str(ans_dict["action"])
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("select_option FINISHING: %s", ans_dict["action"])
+
+                return "report_infeasible" not in ans_dict["action"]
+            logger.debug("select_option CONTINUING: %s", ans_dict["action"])
+        return False
+    
+
 
     def generic_action(self, *args, **kwargs):
+        self.reset()
         while True:
             ans_dict, agent_info = self.generic_action_step(*args, **kwargs)
+            ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("generic_action FINISHING: %s", ans_dict["action"])
-                return ans_dict, agent_info
+
+                raw_action = ans_dict["action"]
+                if "report_result" in raw_action:
+                    return raw_action.split("(")[1].split(")")[0].strip("""'" """)
+                elif 'report_infeasible' in raw_action:
+                    return "Infeasible because: " + raw_action.split("(")[1].split(")")[0].strip("""'" """)
+                else:
+                    return True
             logger.debug("generic_action CONTINUING: %s", ans_dict["action"])
+        return False
+    
+
     
     def generic_action_step(self, *args, **kwargs):
         logger.debug("Entering blocking observation queue.get()")
@@ -419,9 +571,16 @@ does not support vision. Disabling use_screenshot."""
         # We have to get at least one because otherwise we aren't waiting for the result of the previous action.
         # There can be more than one if the previous action was hardcoded, such as opening a tab or going to a URL.
         # wait for previous actions to be consumed in the main thread
-        while not self.action_queue.empty() or len(self.obs_history) == 0 or len(self.actions) > len(self.obs_history):
+        time.sleep(0.5)
+        self.action_queue.join()
+        self.waiting_for_action.wait()
+        self.waiting_for_action.clear()
+
+        while not self.observation_queue.empty():
             obs = self.observation_queue.get()
             self.obs_history.append(obs)
+            self.observation_queue.task_done()
+
             logger.debug("retrieved observation from queue, queue is empty: %s", self.observation_queue.empty())
 
             if self.observation_queue.empty():
@@ -435,10 +594,10 @@ does not support vision. Disabling use_screenshot."""
         system_prompt = SystemMessage(dp.SystemPrompt().prompt)
         logger.debug(f"actions: {len(self.actions)}")
         logger.debug(f"observation history: {len(self.obs_history)}")
-        for a in self.actions:
-            logger.debug(f"Final action: {str(a)[0:20]}")
-        for o in self.obs_history:
-            logger.debug(f"observation: {str(o)[0:20]}")
+        #for a in self.actions:
+            #logger.debug(f"Final action: {str(a)[0:20]}")
+        #for o in self.obs_history:
+            #logger.debug(f"observation: {str(o)[0:20]}")
 
         main_prompt = ExecutorSystemPrompt(
                 self.executor_action_set,
@@ -451,7 +610,7 @@ does not support vision. Disabling use_screenshot."""
                 step=self.plan_step,
                 flags=self.flags,
                 )
-        logger.debug("main_prompt: %s", main_prompt.prompt)
+        #logger.debug("main_prompt: %s", main_prompt.prompt)
 
         max_prompt_tokens, max_trunc_itr = self._get_maxes()
 
@@ -460,9 +619,10 @@ does not support vision. Disabling use_screenshot."""
             max_prompt_tokens=max_prompt_tokens,
             model_name=self.executor_model_args.model_name,
             max_iterations=max_trunc_itr,
-            additional_prompts=[f"\n<your task>\n{task_prompt_text}\n</your task>"],
+            additional_prompts=[],
         )
 
+        ans_dict = None
         try:
             chat_messages = Discussion([system_prompt, human_prompt])
             ans_dict = retry(
@@ -494,6 +654,6 @@ does not support vision. Disabling use_screenshot."""
         )
         self.last_agent_info = agent_info
         self.action_queue.put((ans_dict, agent_info))
-        
+
         return ans_dict, agent_info
 

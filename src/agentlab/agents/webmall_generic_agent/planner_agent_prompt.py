@@ -79,7 +79,8 @@ class ExecutorSystemPrompt(MainPrompt):
                 logging.warning(
                     "Agent is in goal mode, but multiple user messages are present in the chat. Consider switching to `enable_chat=True`."
                 )
-            self.instructions = goal
+        
+        self.instructions = goal
 
         self.obs = dp.Observation(
             obs_history[-1],
