@@ -3,8 +3,7 @@ from AgentLab.src.agentlab.agents.dynamic_prompting import PromptElement
 
 def search_on_page_prompt(search_text: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""Find the search bar on the current page and search for the text: {search_text}.
-    Select the best-matching result and return its URL as a string using the syntax
+    p._prompt = f"""Search for the product {search_text} and open the page of the best-matching result. Once you're on the page, return the URL of the best-matching result as a string using the syntax:
     <action>
     report_result(url="https://www.example.com")
     </action>
@@ -17,7 +16,7 @@ def search_on_page_prompt(search_text: str) -> str:
 
 def navigate_to_page_prompt(description: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""From the current page, navigate to the page described by the following description: {description}.
+    p._prompt = f"""Starting from the current page, navigate to the page described by the following description: {description}.
     When finished, return
     <action>
     done()
@@ -31,7 +30,7 @@ def navigate_to_page_prompt(description: str) -> str:
 
 def extract_information_from_page_prompt(description: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""From the current page, extract the information described by the following description: {description}.
+    p._prompt = f"""On the current page, extract the information described by the following description: {description}.
     Return the information as a string.
     When finished, return
     <action>
@@ -46,7 +45,7 @@ def extract_information_from_page_prompt(description: str) -> str:
 
 def fill_text_field_prompt(field_description: str, text: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""From the current page, find the text field described by the following description: {field_description} with the following text: {text}.
+    p._prompt = f"""On the current page, find the text field described by the following description: {field_description} with the following text: {text}.
 When finished, return
     <action>
     done()
@@ -60,7 +59,7 @@ When finished, return
 
 def press_button_prompt(button_description: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""From the current page, press the button described by the following description: {button_description}.
+    p._prompt = f"""On the current page, press the button described by the following description: {button_description}.
 When finished, return
     <action>
     done()
@@ -74,7 +73,7 @@ When finished, return
 
 def select_option_prompt(bid: str, options: str | list[str]) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""From the current page, select the option described by the following description: {bid} with the following options: {options}.
+    p._prompt = f"""On the current page, select the option described by the following description: {bid} with the following options: {options}.
     When finished, return
     <action>
     done()

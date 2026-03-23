@@ -517,6 +517,37 @@ Use the provided Python functions to write a plan in Python code to reach the go
             ]
 
 
+class ExecutorGoalInstructions(PromptElement):
+    def __init__(self, goal_str:str, visible: bool = True, extra_instructions=None) -> None:
+        super().__init__(visible)
+        self._prompt = [
+            dict(
+                type="text",
+                text=f"""\
+# Instructions
+Review the current state of the page and all other information to find the best
+possible next action to accomplish your goal. Your answer will be interpreted
+and executed by a program, make sure to follow the formatting instructions.
+
+## Goal:
+{goal_str}
+""",
+            )
+        ]
+
+        if extra_instructions:
+            self._prompt += [
+                dict(
+                    type="text",
+                    text=f"""
+
+## Extra instructions:
+
+{extra_instructions}
+""",
+                )
+            ]
+
 class GoalInstructions(PromptElement):
     def __init__(self, goal_object, visible: bool = True, extra_instructions=None) -> None:
         super().__init__(visible)

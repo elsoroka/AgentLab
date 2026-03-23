@@ -271,7 +271,7 @@ class PlanningAgent(Agent):
 
 
                 
-    @cost_tracker_decorator
+    #@cost_tracker_decorator
     def get_action(self, obs):
         if len(self.actions) > 0:
             self.action_queue.task_done() # corresponds to the previous action
@@ -283,7 +283,7 @@ class PlanningAgent(Agent):
 
         # Now the plan is running, so we get an action from the threaded executor
         logger.debug("mainloop: entering a blocking action_queue.get()")
-        
+
         # this flags that we are waiting for a new action to be computed
         self.waiting_for_action.set()
         result = self.action_queue.get()
@@ -340,6 +340,24 @@ does not support vision. Disabling use_screenshot."""
     # The executor runs in a thread
     # note: ignore potentialconcurrency issues for now, we will fix them later.
     # Here is where we define the executor actions.
+
+    def clean_and_parse_executor_action(self, raw_action:str)->str:
+        if "report_result" in raw_action:
+            # strip off ' and " and extract the report_result("result")" string
+            if '=' in raw_action:
+                raw_action = raw_action.split("=")[1]
+                
+            else:
+                raw_action = raw_action.split("(")[1].split(")")[0]
+            raw_action = raw_action.split(")")[0].strip("""'" """)
+            return raw_action
+        elif 'done' in raw_action:
+            return True
+        elif 'report_infeasible' in raw_action:
+            return f"Infeasible: {raw_action}" 
+        else:
+            return False
+
     def noop(self):
         # make ans_dict
         ans_dict = {
@@ -406,9 +424,9 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("navigate_to_page FINISHING: %s", ans_dict["action"])
                 
-                return "report_infeasible" not in ans_dict["action"]
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("navigate_to_page CONTINUING: %s", ans_dict["action"])
-        return False
+
     
 
     def extract_information_from_page(self, description:str):
@@ -424,9 +442,9 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("extract_information_from_page FINISHING: %s", ans_dict["action"])
 
-                return ans_dict["action"].split("(=")[1].split(")")[0].strip("""'" """)
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("extract_information_from_page CONTINUING: %s", ans_dict["action"])
-        return ''
+
 
 
     def search_on_page(self, url:str, search_text:str):
@@ -443,14 +461,9 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("search_on_page FINISHING: %s", ans_dict["action"])
 
-                raw_action = ans_dict["action"]
-                if "report_result" in raw_action:
-                    # strip off ' and " and extract the report_result("result")" string
-                    return raw_action.split("(=")[1].split(")")[0].strip("""'" """)
-                else:
-                    return None
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("search_on_page CONTINUING: %s", ans_dict["action"])
-        return None
+
 
 
     def add_to_cart(self, url:str, item_description:str):
@@ -467,9 +480,9 @@ does not support vision. Disabling use_screenshot."""
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("add_to_cart FINISHING: %s", ans_dict["action"])                
-                return "report_infeasible" not in ans_dict["action"]
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("add_to_cart CONTINUING: %s", ans_dict["action"])
-        return False
+
 
     def checkout(self, payment_and_shipping_information:str):
         """Checkout from the current page. Return True if successful, False otherwise.
@@ -484,10 +497,9 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("checkout FINISHING: %s", ans_dict["action"])
 
-                return "report_infeasible" not in ans_dict["action"]
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("checkout CONTINUING: %s", ans_dict["action"])
-        return False
-    
+
 
     def fill_text_field(self, field_description:str, text:str)->bool:
         """Fill the text field with the given text. Return True if successful, False otherwise.
@@ -502,9 +514,9 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("fill_text_field FINISHING: %s", ans_dict["action"])
 
-                return "report_infeasible" not in ans_dict["action"]
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("fill_text_field CONTINUING: %s", ans_dict["action"])
-        return False
+
     
 
     def press_button(self, button_description:str)->bool:
@@ -520,10 +532,9 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("press_button FINISHING: %s", ans_dict["action"])
 
-                return "report_infeasible" not in ans_dict["action"]
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("press_button CONTINUING: %s", ans_dict["action"])
-        return False
-
+ 
 
     def select_option(self, option_description:str)->bool:
         """Select the option with the given description. Return True if successful, False otherwise.
@@ -538,9 +549,8 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("select_option FINISHING: %s", ans_dict["action"])
 
-                return "report_infeasible" not in ans_dict["action"]
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("select_option CONTINUING: %s", ans_dict["action"])
-        return False
     
 
 
@@ -552,18 +562,11 @@ does not support vision. Disabling use_screenshot."""
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("generic_action FINISHING: %s", ans_dict["action"])
 
-                raw_action = ans_dict["action"]
-                if "report_result" in raw_action:
-                    return raw_action.split("(")[1].split(")")[0].strip("""'" """)
-                elif 'report_infeasible' in raw_action:
-                    return "Infeasible because: " + raw_action.split("(")[1].split(")")[0].strip("""'" """)
-                else:
-                    return True
+                return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("generic_action CONTINUING: %s", ans_dict["action"])
-        return False
-    
 
     
+
     def generic_action_step(self, *args, **kwargs):
         logger.debug("Entering blocking observation queue.get()")
 
@@ -586,10 +589,14 @@ does not support vision. Disabling use_screenshot."""
             if self.observation_queue.empty():
                 break
         
-        task_prompt_text = kwargs.get("task_prompt", "")
+        
+        task_prompt = kwargs.get("task_prompt", "")
         kwargs_copy = deepcopy(kwargs)
         kwargs_copy.pop("task_prompt")
-        logger.debug("task_prompt: %s", task_prompt_text)
+        logger.debug("task_prompt: %s", task_prompt)
+
+        last_obs = deepcopy(self.obs_history[-1])
+        self.obs_history[-1]['goal'] = task_prompt.prompt
 
         system_prompt = SystemMessage(dp.SystemPrompt().prompt)
         logger.debug(f"actions: {len(self.actions)}")
@@ -601,7 +608,7 @@ does not support vision. Disabling use_screenshot."""
 
         main_prompt = ExecutorSystemPrompt(
                 self.executor_action_set,
-                goal=task_prompt_text,
+                goal=task_prompt,
                 obs_history=self.obs_history,
                 actions=self.actions,
                 memories=self.memories,
@@ -654,6 +661,7 @@ does not support vision. Disabling use_screenshot."""
         )
         self.last_agent_info = agent_info
         self.action_queue.put((ans_dict, agent_info))
+        self.obs_history[-1] = last_obs
 
         return ans_dict, agent_info
 

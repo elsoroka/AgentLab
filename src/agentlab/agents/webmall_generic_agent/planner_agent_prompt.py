@@ -70,17 +70,9 @@ class ExecutorSystemPrompt(MainPrompt):
         super().__init__(action_set, obs_history, actions, memories, thoughts, previous_plan, step, flags)
         self.flags = flags
         self.history = dp.History(obs_history, actions, memories, thoughts, flags.obs)
-        if self.flags.enable_chat:
-            self.instructions = dp.ChatInstructions(
-                obs_history[-1]["chat_messages"], extra_instructions=flags.extra_instructions
-            )
-        else:
-            if sum([msg["role"] == "user" for msg in obs_history[-1].get("chat_messages", [])]) > 1:
-                logging.warning(
-                    "Agent is in goal mode, but multiple user messages are present in the chat. Consider switching to `enable_chat=True`."
-                )
-        
-        self.instructions = goal
+        self.instructions = dp.ExecutorGoalInstructions(
+            goal.prompt, extra_instructions=flags.extra_instructions
+        )
 
         self.obs = dp.Observation(
             obs_history[-1],
@@ -117,11 +109,11 @@ class ExecutorSystemPrompt(MainPrompt):
 # left out caution and critique for now
         )
 
-        __prompt = """You are an expert web navigator. Your task is to choose the most appropriate Python function to call for the given webpage content and task.
-"""
+        #__prompt = """You are an expert web navigator. Your task is to choose the most appropriate Python function to call for the given webpage content and task.
+#"""
 
-        if self.flags.use_abstract_example:
-            prompt.add_text(__prompt)
+#        if self.flags.use_abstract_example:
+            #prompt.add_text(__prompt)
         
         return self.obs.add_screenshot(prompt)
 
