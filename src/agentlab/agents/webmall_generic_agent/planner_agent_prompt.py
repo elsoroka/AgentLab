@@ -109,12 +109,11 @@ class ExecutorSystemPrompt(MainPrompt):
 {self.obs.prompt}\
 {self.history.prompt}\
 {self.action_prompt.prompt}\
-{self.be_cautious.prompt}\
 {self.think.prompt}\
 {self.plan.prompt}\
 {self.memory.prompt}\
-{self.criticise.prompt}\
 """
+# left out caution and critique for now
         )
 
         __prompt = """You are an expert web navigator. Your task is to choose the most appropriate Python function to call for the given webpage content and task.

@@ -83,8 +83,8 @@ def retry(
     """
     tries = 0
     while tries < n_retry:
-        for m in messages:
-            print("retry:", m)
+        #for m in messages:
+            #print("retry:", m)
         answer = chat(messages)
         #print("retry: answer: %s", answer)
         # TODO: could we change this to not use inplace modifications ?
@@ -92,7 +92,7 @@ def retry(
         try:
             return parser(answer["content"])
         except ParseError as parsing_error:
-            print("retry: parsing_error: %s", parsing_error)
+        #    print("retry: parsing_error: %s", parsing_error)
             tries += 1
             if log:
                 msg = f"Query failed. Retrying {tries}/{n_retry}.\n[LLM]:\n{answer['content']}\n[User]:\n{str(parsing_error)}"

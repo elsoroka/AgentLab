@@ -157,156 +157,133 @@ class PlanningAgent(Agent):
         return answer
 
 
-    @cost_tracker_decorator
-    def get_executor_action(self, obs, specific_task_prompt:str):
-        # Example implementation
-        self.action_prompt = dp.ActionPrompt(self.action_set, action_flags=self.flags.action)
-        self.instructions = dp.GoalInstructions(specific_task_prompt)
-        prompt = HumanMessage(self.instructions.prompt)
-        prompt.add_text(f"""\
-{self.obs.prompt}\
-{self.history.prompt}\
-{self.action_prompt.prompt}\
-{self.hints.prompt}\
-""")
+    def make_and_start_plan(self, obs:dict):
+        self.obs_history.append(obs)
+        # assumption: self.obs_history has at least one observation.
+        assert(len(self.obs_history) > 0)
 
-        answer = self.executor_llm(prompt)
-        action = self.extract_action(answer)
-        info = {
-            #"think": chain_of_thought,
-            "messages": [prompt, answer],
-            "action": action,
-            "stats": {"prompt_length": len(prompt), "answer_length": len(answer)},
-            #"some_other_info": "webagents are great",
+        model_args = self.planner_model_args
+        try:
+            
+            system_prompt = SystemMessage(dp.PlannerSystemPromptElement().prompt)
+            main_prompt = PlannerSystemPrompt(
+                self.planner_action_set,
+                obs_history=self.obs_history,
+                actions=self.actions,
+                memories=self.memories,
+                thoughts=self.thoughts,
+                previous_plan=self.plan,
+                step=self.plan_step,
+                flags=self.flags,
+            )
+
+            max_prompt_tokens, max_trunc_itr = self._get_maxes()
+
+            human_prompt = dp.fit_tokens(
+                shrinkable=main_prompt,
+                max_prompt_tokens=max_prompt_tokens,
+                model_name=self.planner_model_args.model_name,
+                max_iterations=max_trunc_itr,
+                additional_prompts=[],
+            )
+            chat_messages = Discussion([system_prompt, human_prompt])
+            ans_dict = retry(
+                self.planner_llm,
+                chat_messages,
+                n_retry=self.max_retry,
+                parser=main_prompt._parse_answer,
+            )
+            stats = self.planner_llm.get_stats()
+            if "<plan>" in ans_dict["plan"]:
+                self.plan = ans_dict["plan"].split("<plan>")[1].split("</plan>")[0]
+            else:
+                self.plan = ans_dict["plan"]
+
+            self.plan_step = 0
+            logger.info("plan: %s", self.plan)
+            planner_stats = self.planner_llm.get_stats()
+            planner_stats["n_retry"] = self.max_retry + 1
+            planner_stats["busted_retry"] = 1
+            model_args = self.planner_model_args
+
+            self.plan_step = ans_dict.get("step", self.plan_step)
+            #self.actions.append(ans_dict.get("action", None))
+            #self.memories.append(ans_dict.get("memory", None))
+            #self.thoughts.append(ans_dict.get("think", None))
+
+            agent_info = AgentInfo(
+                think=ans_dict.get("think", None),
+                chat_messages=chat_messages,
+                stats=stats,
+                extra_info={"planner_stats": planner_stats, "chat_model_args": asdict(model_args), #"eco_logits": eco_impacts.dict()
+                },
+            )
+
+            self.last_agent_info = agent_info
+            self.obs_history.pop()
+
+            # launch the plan in a thread
+            self.executor_thread_pool = ThreadPoolExecutor(max_workers=1)
+            self.executor_thread_pool.submit(self.execute_plan, self.plan)
+            
+        except Exception as e:
+            logger.exception("Exception in planner: %s", e)
+            ans_dict = dict(
+                action=None,
+                n_retry=self.max_retry + 1,
+                busted_retry=1,
+            )
+    
+    def execute_plan(self, plan:str):
+        # assumption: plan is valid Python code
+        try:
+            exec(plan, {
+                "action_queue": self.action_queue,
+                "observation_queue": self.observation_queue,
+                "noop": self.noop,
+                "search_on_page": self.search_on_page,
+                "open_page": self.open_page,
+                "close_page":self.close_page,
+                "go_back":self.go_back,
+                "go_forward":self.go_forward,
+                "navigate_to_page":self.navigate_to_page,
+                "extract_information_from_page":self.extract_information_from_page,
+                "fill_text_field":self.fill_text_field,
+                "press_button":self.press_button,
+                "select_option":self.select_option,
+                "generic_action":self.generic_action,
+                "add_to_cart":self.add_to_cart,
+                "checkout":self.checkout,
+            })
+        except Exception as e:
+            # print the traceback
+            logger.exception("Exception in executor: %s", e, exc_info=True)
+
+        finished_action = {
+            "action": "noop()",
+            "n_retry": 0,
+            "busted_retry": 0,
         }
-        return action, info
+        self.action_queue.put((finished_action, None))
 
+
+                
     @cost_tracker_decorator
     def get_action(self, obs):
         self.observation_queue.put(obs)
-        self.obs_history.append(obs)
-
-        ans_dict = dict()
-        stats = dict()
-        model_args = dict()
-        chat_messages = []
-        planner_stats = dict()
 
         if self.plan is None:
-            model_args = self.planner_model_args
-            try:
-                
-                system_prompt = SystemMessage(dp.PlannerSystemPromptElement().prompt)
-                main_prompt = PlannerSystemPrompt(
-                    self.planner_action_set,
-                    obs_history=self.obs_history,
-                    actions=self.actions,
-                    memories=self.memories,
-                    thoughts=self.thoughts,
-                    previous_plan=self.plan,
-                    step=self.plan_step,
-                    flags=self.flags,
-                )
-
-                max_prompt_tokens, max_trunc_itr = self._get_maxes()
-
-                human_prompt = dp.fit_tokens(
-                    shrinkable=main_prompt,
-                    max_prompt_tokens=max_prompt_tokens,
-                    model_name=self.planner_model_args.model_name,
-                    max_iterations=max_trunc_itr,
-                    additional_prompts=[],
-                )
-                chat_messages = Discussion([system_prompt, human_prompt])
-                ans_dict = retry(
-                    self.planner_llm,
-                    chat_messages,
-                    n_retry=self.max_retry,
-                    parser=main_prompt._parse_answer,
-                )
-                stats = self.planner_llm.get_stats()
-                if "<plan>" in ans_dict["plan"]:
-                    self.plan = ans_dict["plan"].split("<plan>")[1].split("</plan>")[0]
-                else:
-                    self.plan = ans_dict["plan"]
-
-                self.plan_step = 0
-                logger.info("plan: %s", self.plan)
-                planner_stats = self.planner_llm.get_stats()
-                planner_stats["n_retry"] = self.max_retry + 1
-                planner_stats["busted_retry"] = 1
-                model_args = self.planner_model_args
-
-                self.plan_step = ans_dict.get("step", self.plan_step)
-                #self.actions.append(ans_dict.get("action", None))
-                #self.memories.append(ans_dict.get("memory", None))
-                #self.thoughts.append(ans_dict.get("think", None))
-
-                agent_info = AgentInfo(
-                    think=ans_dict.get("think", None),
-                    chat_messages=chat_messages,
-                    stats=stats,
-                    extra_info={"planner_stats": planner_stats, "chat_model_args": asdict(model_args), #"eco_logits": eco_impacts.dict()
-                    },
-                )
-
-                self.last_agent_info = agent_info
-
-                # launch the plan in a thread
-                self.executor_thread_pool = ThreadPoolExecutor(max_workers=1)
-                
-                def tmp(plan:str):
-                    try:
-                        exec(plan, {
-                            "action_queue": self.action_queue,
-                            "observation_queue": self.observation_queue,
-                            "noop": self.noop,
-                            "search_on_page": self.search_on_page,
-                            "open_page": self.open_page,
-                            "close_page":self.close_page,
-                            "go_back":self.go_back,
-                            "go_forward":self.go_forward,
-                            "navigate_to_page":self.navigate_to_page,
-                            "extract_information_from_page":self.extract_information_from_page,
-                            "fill_text_field":self.fill_text_field,
-                            "press_button":self.press_button,
-                            "select_option":self.select_option,
-                            "generic_action":self.generic_action,
-                            "add_to_cart":self.add_to_cart,
-                            "checkout":self.checkout,
-                        })
-                    except Exception as e:
-                        logger.exception("Exception in executor: %s", e)
-
-                    finished_action = {
-                        "action": "noop()",
-                        "n_retry": 0,
-                        "busted_retry": 0,
-                    }
-                    self.action_queue.put((finished_action, None))
-
-                self.executor_thread_pool.submit(tmp, self.plan)
-                
-            except Exception as e:
-                logger.exception("Exception in planner: %s", e)
-                ans_dict = dict(
-                    action=None,
-                    n_retry=self.max_retry + 1,
-                    busted_retry=1,
-                )
-                
+            self.make_and_start_plan(obs)
 
         # Now the plan is running, so we get an action from the threaded executor
         logger.debug("mainloop: entering a blocking action_queue.get()")
         result = self.action_queue.get()
-    
         ans_dict, agent_info = result
 
         self.actions.append(ans_dict.get("action", None))
         self.memories.append(ans_dict.get("memory", None))
         self.thoughts.append(ans_dict.get("think", None))
 
-        self.plan_step += 1
 
         return ans_dict["action"], agent_info
 
@@ -411,98 +388,112 @@ does not support vision. Disabling use_screenshot."""
     
     def search_on_page(self, url:str, search_text:str):
         self.open_page(url)
-        return self.generic_action(task_prompt=search_on_page_prompt(search_text))
-
-
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("search_on_page FINISHING: %s", ans_dict["action"])
+                return ans_dict, agent_info
+            logger.debug("search_on_page CONTINUING: %s", ans_dict["action"])
+    
     def add_to_cart(self, url:str, item_description:str):
         self.open_page(url)
-        return self.generic_action(task_prompt=add_to_cart_prompt(item_description))
-
+        while True:
+            ans_dict, agent_info = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("add_to_cart FINISHING: %s", ans_dict["action"])
+                return ans_dict, agent_info
+            logger.debug("add_to_cart CONTINUING: %s", ans_dict["action"])
 
     def generic_action(self, *args, **kwargs):
-        n_steps = 0
-        while n_steps < 10:
-            logger.debug(f"generic_action step {n_steps}: Entering blocking observation queue.get()")
-            # wait for previous actions to be consumed in the main thread
-            while not self.action_queue.empty() or len(self.obs_history) == 0 or len(self.actions) >= len(self.obs_history):
-                time.sleep(1.0)
-            while True:
-                obs = self.observation_queue.get()
-                logger.debug("retrieved observation from queue, queue is empty: %s", self.observation_queue.empty())
-                #self.obs_history.append(obs)
-                if self.observation_queue.empty():
-                    break
-            n_steps += 1
-            
-            task_prompt_text = kwargs.get("task_prompt", "")
-            kwargs_copy = deepcopy(kwargs)
-            kwargs_copy.pop("task_prompt")
-            logger.debug("task_prompt: %s", task_prompt_text)
-            # this forces the task prompt to be the last message in the chat history
-            #self.obs_history.append({"chat_messages": [{"role": "user", "text": task_prompt_text}]})
+        while True:
+            ans_dict, agent_info = self.generic_action_step(*args, **kwargs)
+            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
+                logger.debug("generic_action FINISHING: %s", ans_dict["action"])
+                return ans_dict, agent_info
+            logger.debug("generic_action CONTINUING: %s", ans_dict["action"])
+    
+    def generic_action_step(self, *args, **kwargs):
+        logger.debug("Entering blocking observation queue.get()")
 
-            system_prompt = SystemMessage(dp.SystemPrompt().prompt)
-            logger.debug(f"actions: {len(self.actions)}")
-            logger.debug(f"observation history: {len(self.obs_history)}")
-            for a in self.actions:
-                logger.debug(f"Final action: {str(a)[0:20]}")
-            for o in self.obs_history:
-                logger.debug(f"observation: {str(o)[0:20]}")
+                # Get at least one observation from the queue
+        # We have to get at least one because otherwise we aren't waiting for the result of the previous action.
+        # There can be more than one if the previous action was hardcoded, such as opening a tab or going to a URL.
+        # wait for previous actions to be consumed in the main thread
+        while not self.action_queue.empty() or len(self.obs_history) == 0 or len(self.actions) > len(self.obs_history):
+            obs = self.observation_queue.get()
+            self.obs_history.append(obs)
+            logger.debug("retrieved observation from queue, queue is empty: %s", self.observation_queue.empty())
 
-            main_prompt = ExecutorSystemPrompt(
-                    self.executor_action_set,
-                    goal=task_prompt_text,
-                    obs_history=self.obs_history,
-                    actions=self.actions,
-                    memories=self.memories,
-                    thoughts=self.thoughts,
-                    previous_plan=self.plan,
-                    step=self.plan_step,
-                    flags=self.flags,
-                    )
-            logger.debug("main_prompt: %s", main_prompt.prompt)
-
-            max_prompt_tokens, max_trunc_itr = self._get_maxes()
-
-            human_prompt = dp.fit_tokens(
-                shrinkable=main_prompt,
-                max_prompt_tokens=max_prompt_tokens,
-                model_name=self.executor_model_args.model_name,
-                max_iterations=max_trunc_itr,
-                additional_prompts=[f"\n<your task>\n{task_prompt_text}\n</your task>"],
-            )
-
-            try:
-                chat_messages = Discussion([system_prompt, human_prompt])
-                ans_dict = retry(
-                    self.executor_llm,
-                    chat_messages,
-                    n_retry=self.max_retry,
-                    parser=main_prompt._parse_answer,
-                )
-                ans_dict["busted_retry"] = 0
-                # inferring the number of retries, TODO: make this less hacky
-                ans_dict["n_retry"] = (len(chat_messages) - 3) / 2
-            except ParseError as e:
-                ans_dict = dict(
-                    action=None,
-                    n_retry=self.max_retry + 1,
-                    busted_retry=1,
-                )
-
-            stats = self.executor_llm.get_stats()
-            stats["n_retry"] = ans_dict["n_retry"]
-            stats["busted_retry"] = ans_dict["busted_retry"]
-
-            agent_info = AgentInfo(
-                think=ans_dict.get("think", None),
-                chat_messages=chat_messages,
-                stats=stats,
-                extra_info={"executor_model_args": asdict(self.executor_model_args),# "eco_logits": eco_impacts.dict()
-                },
-            )
-            self.last_agent_info = agent_info
-            self.action_queue.put((ans_dict, agent_info))
+            if self.observation_queue.empty():
+                break
         
-        return "Failure"
+        task_prompt_text = kwargs.get("task_prompt", "")
+        kwargs_copy = deepcopy(kwargs)
+        kwargs_copy.pop("task_prompt")
+        logger.debug("task_prompt: %s", task_prompt_text)
+
+        system_prompt = SystemMessage(dp.SystemPrompt().prompt)
+        logger.debug(f"actions: {len(self.actions)}")
+        logger.debug(f"observation history: {len(self.obs_history)}")
+        for a in self.actions:
+            logger.debug(f"Final action: {str(a)[0:20]}")
+        for o in self.obs_history:
+            logger.debug(f"observation: {str(o)[0:20]}")
+
+        main_prompt = ExecutorSystemPrompt(
+                self.executor_action_set,
+                goal=task_prompt_text,
+                obs_history=self.obs_history,
+                actions=self.actions,
+                memories=self.memories,
+                thoughts=self.thoughts,
+                previous_plan=self.plan,
+                step=self.plan_step,
+                flags=self.flags,
+                )
+        logger.debug("main_prompt: %s", main_prompt.prompt)
+
+        max_prompt_tokens, max_trunc_itr = self._get_maxes()
+
+        human_prompt = dp.fit_tokens(
+            shrinkable=main_prompt,
+            max_prompt_tokens=max_prompt_tokens,
+            model_name=self.executor_model_args.model_name,
+            max_iterations=max_trunc_itr,
+            additional_prompts=[f"\n<your task>\n{task_prompt_text}\n</your task>"],
+        )
+
+        try:
+            chat_messages = Discussion([system_prompt, human_prompt])
+            ans_dict = retry(
+                self.executor_llm,
+                chat_messages,
+                n_retry=self.max_retry,
+                parser=main_prompt._parse_answer,
+            )
+            ans_dict["busted_retry"] = 0
+            # inferring the number of retries, TODO: make this less hacky
+            ans_dict["n_retry"] = (len(chat_messages) - 3) / 2
+        except ParseError as e:
+            ans_dict = dict(
+                action=None,
+                n_retry=self.max_retry + 1,
+                busted_retry=1,
+            )
+
+        stats = self.executor_llm.get_stats()
+        stats["n_retry"] = ans_dict["n_retry"]
+        stats["busted_retry"] = ans_dict["busted_retry"]
+
+        agent_info = AgentInfo(
+            think=ans_dict.get("think", None),
+            chat_messages=chat_messages,
+            stats=stats,
+            extra_info={"executor_model_args": asdict(self.executor_model_args),# "eco_logits": eco_impacts.dict()
+            },
+        )
+        self.last_agent_info = agent_info
+        self.action_queue.put((ans_dict, agent_info))
+        
+        return ans_dict, agent_info
 
