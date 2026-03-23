@@ -139,7 +139,12 @@ class PlanningAgent(Agent):
         # Executor management
         self.action_queue = Queue()
         self.observation_queue = Queue()   
-        #self.actions.append(None) # TODO remove
+
+        # history of actions etc. when we reset them for each executor task
+        self.all_actions = []
+        self.all_memories = []
+        self.all_thoughts = []
+        self.all_obs_history = []
 
         # action things
         self.navigate_to_page = functools.partial(self.generic_action, task_prompt=navigate_to_page_prompt)
@@ -273,7 +278,7 @@ class PlanningAgent(Agent):
                 
     #@cost_tracker_decorator
     def get_action(self, obs):
-        if len(self.actions) > 0:
+        if len(self.actions) > 0 or len(self.all_actions) > 0:
             self.action_queue.task_done() # corresponds to the previous action
 
         self.observation_queue.put(obs)
@@ -286,8 +291,7 @@ class PlanningAgent(Agent):
 
         # this flags that we are waiting for a new action to be computed
         self.waiting_for_action.set()
-        result = self.action_queue.get()
-        ans_dict, agent_info = result
+        ans_dict, agent_info  = self.action_queue.get()
         
         self.actions.append(ans_dict.get("action", None))
         self.memories.append(ans_dict.get("memory", None))
@@ -296,6 +300,15 @@ class PlanningAgent(Agent):
         return ans_dict["action"], agent_info
 
     def reset(self, seed=None):
+        if hasattr(self, 'actions'):
+            self.all_actions = self.actions
+        if hasattr(self, 'memories'):
+            self.all_memories = self.memories
+        if hasattr(self, 'thoughts'):
+            self.all_thoughts = self.thoughts
+        if hasattr(self, 'obs_history'):
+            self.all_obs_history = self.obs_history
+
         self.seed = seed
         self.memories = []
         self.thoughts = []
@@ -359,6 +372,7 @@ does not support vision. Disabling use_screenshot."""
             return False
 
     def noop(self):
+        self.action_queue.join()
         # make ans_dict
         ans_dict = {
             "action": "noop()",
@@ -369,6 +383,7 @@ does not support vision. Disabling use_screenshot."""
         return None
 
     def go_back(self):
+        self.action_queue.join()
         ans_dict = {
             "action": "go_back()",
             "n_retry": 0,
@@ -378,6 +393,7 @@ does not support vision. Disabling use_screenshot."""
         return None
 
     def go_forward(self):
+        self.action_queue.join()
         ans_dict = {
             "action": "go_forward()",
             "n_retry": 0,
@@ -387,6 +403,7 @@ does not support vision. Disabling use_screenshot."""
         return None
 
     def open_page(self, url:str):
+        self.action_queue.join()
         ans_dict = {
             "action": "new_tab()",
             "n_retry": 0,
@@ -402,6 +419,7 @@ does not support vision. Disabling use_screenshot."""
         return None
 
     def close_page(self):
+        self.action_queue.join()
         ans_dict = {
             "action": "tab_close()",
             "n_retry": 0,

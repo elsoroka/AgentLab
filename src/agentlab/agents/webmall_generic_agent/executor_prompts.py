@@ -3,13 +3,15 @@ from AgentLab.src.agentlab.agents.dynamic_prompting import PromptElement
 
 def search_on_page_prompt(search_text: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""Search for the product {search_text} and open the page of the best-matching result. Once you're on the page, return the URL of the best-matching result as a string using the syntax:
+    p._prompt = f"""Search for the product {search_text} and open the page of the best-matching result. Once you're on the page, return the URL of the best-matching result as a string and close the tab. Example:
     <action>
     report_result(url="https://www.example.com")
+    tab_close()
     </action>
     If the action is not possible, return
     <action>
     report_infeasible()
+    tab_close()
     </action>
 """
     return p
