@@ -163,15 +163,17 @@ class PlanningAgent(Agent):
             answer = answer.strip('`')
         return answer
 
-
     def make_and_start_plan(self, obs:dict):
+        """Call the PlannerAgent to make the high-level plan in code to call the executor agent.
+        The plan is run in a thread using exec().
+        """
         self.obs_history.append(obs)
         # assumption: self.obs_history has at least one observation.
         assert(len(self.obs_history) > 0)
 
         model_args = self.planner_model_args
         try:
-            
+            # system prompt for the PLANNER agent which prompts it to make a plan, no action.
             system_prompt = SystemMessage(dp.PlannerSystemPromptElement().prompt)
             main_prompt = PlannerSystemPrompt(
                 self.planner_action_set,
@@ -214,9 +216,6 @@ class PlanningAgent(Agent):
             model_args = self.planner_model_args
 
             self.plan_step = ans_dict.get("step", self.plan_step)
-            #self.actions.append(ans_dict.get("action", None))
-            #self.memories.append(ans_dict.get("memory", None))
-            #self.thoughts.append(ans_dict.get("think", None))
 
             agent_info = AgentInfo(
                 think=ans_dict.get("think", None),
@@ -276,8 +275,13 @@ class PlanningAgent(Agent):
 
 
                 
-    #@cost_tracker_decorator
+    @cost_tracker_decorator
     def get_action(self, obs):
+        """ The original get_action function
+        To adapt this to our planner/executor model,
+        the planner/executor consume observations from the observation queue and produce actions on the action queue.
+        this function puts the new observation in the observation queue and consumes an action from the action queue.
+        """
         if len(self.actions) > 0 or len(self.all_actions) > 0:
             self.action_queue.task_done() # corresponds to the previous action
 
@@ -379,6 +383,7 @@ does not support vision. Disabling use_screenshot."""
             "n_retry": 0,
             "busted_retry": 0,
         }
+        # TODO the self.last_agent_info is a stupid hack to stop the AgentLab framework from crashing.
         self.action_queue.put((ans_dict, self.last_agent_info))
         return None
 
@@ -435,15 +440,12 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         navigate_to_page("The home page of this website.")
         """
+        self.action_queue.join()
         self.reset()
-        while True:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("navigate_to_page FINISHING: %s", ans_dict["action"])
-                
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("navigate_to_page CONTINUING: %s", ans_dict["action"])
+        final_result = None
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
+        return final_result
 
     
 
@@ -453,17 +455,12 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         extract_information_from_page("The lowest price of the product.")
         """
+        self.action_queue.join()
+        final_result = None
         self.reset()
-        while True:
+        while not final_result:
             ans_dict, agent_info = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("extract_information_from_page FINISHING: %s", ans_dict["action"])
-
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("extract_information_from_page CONTINUING: %s", ans_dict["action"])
-
-
+        return final_result
 
     def search_on_page(self, url:str, search_text:str):
         """Open the search_page_url and search for the search_text. Return the best match page URL as a string, or None if not found.
@@ -471,16 +468,13 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         search_on_page("https://www.google.com", "Python")
         """
+        self.action_queue.join()
+        final_result = None
         self.reset()
         self.open_page(url)
-        while True:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("search_on_page FINISHING: %s", ans_dict["action"])
-
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("search_on_page CONTINUING: %s", ans_dict["action"])
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
+        return final_result
 
 
 
@@ -490,17 +484,14 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         add_to_cart("product_url", "The product description") # returns True because this is a product page
         """
+        self.action_queue.join()
+        final_result = None
         self.reset()
         self.open_page(url)
 
-        while True:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("add_to_cart FINISHING: %s", ans_dict["action"])                
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("add_to_cart CONTINUING: %s", ans_dict["action"])
-
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
+        return final_result
 
     def checkout(self, payment_and_shipping_information:str):
         """Checkout from the current page. Return True if successful, False otherwise.
@@ -508,15 +499,12 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         checkout("A string containing payment information and shipping address") # while on a web shopping site with at least one item in the cart, returns True
         """
+        self.action_queue.join()
+        final_result = None
         self.reset()
-        while True:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=checkout_prompt(payment_and_shipping_information))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("checkout FINISHING: %s", ans_dict["action"])
-
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("checkout CONTINUING: %s", ans_dict["action"])
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=checkout_prompt(payment_and_shipping_information))
+        return final_result
 
 
     def fill_text_field(self, field_description:str, text:str)->bool:
@@ -525,16 +513,12 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         fill_text_field("The email field", "example@example.com")
         """
+        self.action_queue.join()
+        final_result = None
         self.reset()
-        while True:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=fill_text_field_prompt(field_description, text))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("fill_text_field FINISHING: %s", ans_dict["action"])
-
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("fill_text_field CONTINUING: %s", ans_dict["action"])
-
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=fill_text_field_prompt(field_description, text))
+        return final_result
     
 
     def press_button(self, button_description:str)->bool:
@@ -543,15 +527,12 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         press_button("The submit button")
         """
+        self.action_queue.join()
+        final_result = None
         self.reset()
-        while True:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=press_button_prompt(button_description))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("press_button FINISHING: %s", ans_dict["action"])
-
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("press_button CONTINUING: %s", ans_dict["action"])
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=press_button_prompt(button_description))
+        return final_result
  
 
     def select_option(self, option_description:str)->bool:
@@ -560,29 +541,22 @@ does not support vision. Disabling use_screenshot."""
         Examples:
         select_option("Ground shipping")
         """
+        self.action_queue.join()
+        final_result = None
         self.reset()
-        while True:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=select_option_prompt(option_description))
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("select_option FINISHING: %s", ans_dict["action"])
-
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("select_option CONTINUING: %s", ans_dict["action"])
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=select_option_prompt(option_description))
+        return final_result
     
 
 
     def generic_action(self, *args, **kwargs):
+        self.action_queue.join()
+        final_result = None
         self.reset()
-        while True:
-            ans_dict, agent_info = self.generic_action_step(*args, **kwargs)
-            ans_dict["action"] = str(ans_dict["action"])
-            if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("generic_action FINISHING: %s", ans_dict["action"])
-
-                return self.clean_and_parse_executor_action(ans_dict["action"])
-            logger.debug("generic_action CONTINUING: %s", ans_dict["action"])
-
+        while not final_result:
+            ans_dict, agent_info, final_result = self.generic_action_step(*args, **kwargs)
+        return final_result
     
 
     def generic_action_step(self, *args, **kwargs):
@@ -592,7 +566,6 @@ does not support vision. Disabling use_screenshot."""
         # We have to get at least one because otherwise we aren't waiting for the result of the previous action.
         # There can be more than one if the previous action was hardcoded, such as opening a tab or going to a URL.
         # wait for previous actions to be consumed in the main thread
-        time.sleep(0.5)
         self.action_queue.join()
         self.waiting_for_action.wait()
         self.waiting_for_action.clear()
@@ -607,12 +580,18 @@ does not support vision. Disabling use_screenshot."""
             if self.observation_queue.empty():
                 break
         
-        
+        # final_result is ONLY returned when the executor task is complete, meaning
+        # done, report_result, or report_infeasible is present in the action (s).
+        final_result = None
+
         task_prompt = kwargs.get("task_prompt", "")
         kwargs_copy = deepcopy(kwargs)
         kwargs_copy.pop("task_prompt")
         logger.debug("task_prompt: %s", task_prompt)
 
+        # Another stupid hack
+        # without this, we cannot remove the high-level goal ("find x product", "purchase x product", etc. from the prompt)
+        # this replaces the high-level goal with the executor's subgoal (e.g. "search for x", "find y information on this page")
         last_obs = deepcopy(self.obs_history[-1])
         self.obs_history[-1]['goal'] = task_prompt.prompt
 
@@ -666,6 +645,19 @@ does not support vision. Disabling use_screenshot."""
                 busted_retry=1,
             )
 
+        # have we got a final result?
+        # There can be more than one action here so we have to catch the rest of them and enqueue them
+        # for example if we have the actions "report_result(url="url")\ntab_close()"" we want to set ans_dict['action'] to "tab_close()" and final_result to "url"
+        clean_action = ''
+        for line in ans_dict["action"].split("\n"):
+            if "report_result" in line or "done" in line or "report_infeasible" in line:
+                logger.debug("navigate_to_page FINISHING: %s", line)
+                final_result = self.clean_and_parse_executor_action(line)
+            
+            else:
+                clean_action += line + "\n"
+        ans_dict["action"] = clean_action
+
         stats = self.executor_llm.get_stats()
         stats["n_retry"] = ans_dict["n_retry"]
         stats["busted_retry"] = ans_dict["busted_retry"]
@@ -681,5 +673,5 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.put((ans_dict, agent_info))
         self.obs_history[-1] = last_obs
 
-        return ans_dict, agent_info
+        return ans_dict, agent_info, final_result
 
