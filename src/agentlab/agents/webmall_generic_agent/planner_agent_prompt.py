@@ -189,12 +189,16 @@ class PlannerSystemPrompt(dp.Shrinkable):
     def _parse_answer(self, text_answer):
         if text_answer.startswith('`') or text_answer.endswith('`'):
             text_answer = text_answer.strip('`')
-        
+
+        # Strip <plan> tags before validating syntax
+        if "<plan>" in text_answer:
+            text_answer = text_answer.split("<plan>")[1].split("</plan>")[0].strip()
+
         try:
             compile(text_answer, '<string>', 'exec')
         except Exception as e:
             print(e)
-        
+
         ans_dict = {}
         ans_dict['plan'] = text_answer
         return ans_dict

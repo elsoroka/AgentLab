@@ -13,7 +13,6 @@ from dataclasses import asdict, dataclass
 from re import S
 import time
 from warnings import warn
-import functools
 import logging
 import bgym
 
@@ -70,7 +69,7 @@ class PlanningAgentArgs(AgentArgs):
         """Override Some flags based on the benchmark."""
         if benchmark.name.startswith("miniwob"):
             self.flags.obs.use_html = True
-        
+
         """Override the action set for the planner, keeping the original low level action set for the executor."""
         self.flags.action.planner_action_set = deepcopy(DEFAULT_HIGHLEVEL_ACTION_SET_ARGS["plannerhighlevel"])
 
@@ -129,25 +128,21 @@ class PlanningAgent(Agent):
         self.flags = flags
         self.planner_action_set = self.flags.action.planner_action_set.make_action_set()
         self.executor_action_set = self.flags.action.action_set.make_action_set()
-        self.waiting_for_action = threading.Event() # event to wait for the action to be finished
+        self.max_executor_steps = 10  # max LLM steps per sub-task before giving up
 
         self._obs_preprocessor = dp.make_obs_preprocessor(self.flags.obs)
 
         self._check_flag_constancy()
         self.reset(seed=None)
 
-        # Executor management
+        # Queues for executor <-> main loop communication.
+        # Design: each action put in action_queue is matched by one observation put in
+        # observation_queue (by get_action after BrowserGym steps the env).
+        # _execute_one_action() puts one action and then blocks waiting for the resulting obs.
+        # This serializes the action→obs cycle without any join()/Event() gymnastics.
         self.action_queue = Queue()
-        self.observation_queue = Queue()   
-        #self.actions.append(None) # TODO remove
-
-        # action things
-        self.navigate_to_page = functools.partial(self.generic_action, task_prompt=navigate_to_page_prompt)
-        self.extract_information_from_page = functools.partial(self.generic_action, task_prompt=extract_information_from_page_prompt)
-        self.fill_text_field = functools.partial(self.generic_action, task_prompt=fill_text_field_prompt)
-        self.press_button = functools.partial(self.generic_action, task_prompt=press_button_prompt)
-        self.select_option = functools.partial(self.generic_action, task_prompt=select_option_prompt)
-        self.checkout = functools.partial(self.generic_action, task_prompt=checkout_prompt)
+        self.observation_queue = Queue()
+        self.last_obs = None  # most recent obs, for sub-tasks that call reset() before generic_action_step
 
     def obs_preprocessor(self, obs: dict) -> dict:
         return self._obs_preprocessor(obs)
@@ -166,7 +161,7 @@ class PlanningAgent(Agent):
 
         model_args = self.planner_model_args
         try:
-            
+
             system_prompt = SystemMessage(dp.PlannerSystemPromptElement().prompt)
             main_prompt = PlannerSystemPrompt(
                 self.planner_action_set,
@@ -209,16 +204,12 @@ class PlanningAgent(Agent):
             model_args = self.planner_model_args
 
             self.plan_step = ans_dict.get("step", self.plan_step)
-            #self.actions.append(ans_dict.get("action", None))
-            #self.memories.append(ans_dict.get("memory", None))
-            #self.thoughts.append(ans_dict.get("think", None))
 
             agent_info = AgentInfo(
                 think=ans_dict.get("think", None),
                 chat_messages=chat_messages,
                 stats=stats,
-                extra_info={"planner_stats": planner_stats, "chat_model_args": asdict(model_args), #"eco_logits": eco_impacts.dict()
-                },
+                extra_info={"planner_stats": planner_stats, "chat_model_args": asdict(model_args)},
             )
 
             self.last_agent_info = agent_info
@@ -227,8 +218,7 @@ class PlanningAgent(Agent):
             # launch the plan in a thread
             self.executor_thread_pool = ThreadPoolExecutor(max_workers=1)
             self.executor_thread_pool.submit(self.execute_plan, self.plan)
-            self.waiting_for_action.clear()
-            
+
         except Exception as e:
             logger.exception("Exception in planner: %s", e)
             ans_dict = dict(
@@ -236,7 +226,7 @@ class PlanningAgent(Agent):
                 n_retry=self.max_retry + 1,
                 busted_retry=1,
             )
-    
+
     def execute_plan(self, plan:str):
         # assumption: plan is valid Python code
         try:
@@ -262,33 +252,94 @@ class PlanningAgent(Agent):
             # print the traceback
             logger.exception("Exception in executor: %s", e, exc_info=True)
 
+        # Signal the main loop that this plan is done. Reset plan so get_action will re-plan.
+        # Put the sentinel directly (no obs wait) — main loop returns noop, then re-plans.
+        self.plan = None
         finished_action = {
             "action": "noop()",
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((finished_action, None))
+        self.action_queue.put((finished_action, self.last_agent_info))
 
+    # -------------------------------------------------------------------------
+    # Core synchronization primitive: put ONE action, wait for ONE observation.
+    # Every browser action goes through here, ensuring the executor always sees
+    # the fresh post-action observation before deciding what to do next.
+    # -------------------------------------------------------------------------
 
-                
+    # Prefixes that identify a line as a meta-action (a signal to the planning loop,
+    # not a real BrowserGym browser command). We match on the START of the stripped
+    # line to avoid false-positives when these words appear inside string arguments
+    # (e.g., fill('11', 'Infeasible: report_infeasible()')).
+    _META_PREFIXES = ('report_result(', 'report_infeasible(', 'done()')
+
+    def _is_meta_action_line(self, line: str) -> bool:
+        stripped = line.strip()
+        if any(stripped.startswith(p) for p in self._META_PREFIXES):
+            return True
+        # Handle assignment form: result = report_result(...)
+        if '=' in stripped and 'report_result(' in stripped:
+            lhs, _, rhs = stripped.partition('=')
+            if rhs.strip().startswith('report_result('):
+                return True
+        return False
+
+    def _to_browser_action(self, action_str: str) -> str:
+        """Strip meta-action lines (done/report_result/report_infeasible) from an action string.
+
+        Meta-actions are signals from the executor LLM to the planning loop — they are NOT
+        valid BrowserGym actions. Sending them to the browser would prematurely end the episode
+        (done()) or cause errors. We keep them in ans_dict["action"] for loop termination
+        detection while sending only real browser actions to the environment.
+
+        Detection uses startswith on the stripped line so that meta-keyword strings appearing
+        inside fill() arguments do NOT cause the fill line to be incorrectly stripped.
+        """
+        if action_str is None:
+            return 'noop()'
+        lines = [
+            l for l in action_str.split('\n')
+            if l.strip() and not self._is_meta_action_line(l)
+        ]
+        return '\n'.join(lines) if lines else 'noop()'
+
+    def _execute_one_action(self, action_str: str, agent_info=None) -> dict:
+        """Put one browser action in the queue and block until the resulting observation arrives.
+
+        Returns the observation dict that resulted from executing the action.
+        """
+        ans_dict = {
+            "action": action_str,
+            "n_retry": 0,
+            "busted_retry": 0,
+        }
+        info = agent_info if agent_info is not None else self.last_agent_info
+        self.action_queue.put((ans_dict, info))
+        obs = self.observation_queue.get()
+        self.observation_queue.task_done()
+        self.last_obs = obs
+        return obs
+
     #@cost_tracker_decorator
     def get_action(self, obs):
-        if len(self.actions) > 0:
-            self.action_queue.task_done() # corresponds to the previous action
-
-        self.observation_queue.put(obs)
+        """Called by BrowserGym each step. Delivers the new obs to the executor thread
+        and retrieves the next action to execute."""
 
         if self.plan is None:
+            # First call (or after plan completion): start a new plan.
+            # Don't put obs in the queue yet — the executor hasn't issued its first
+            # action yet, so there is nothing waiting for an obs.
             self.make_and_start_plan(obs)
+        else:
+            # Deliver the obs that resulted from the previous action so the executor
+            # (blocked in _execute_one_action) can continue.
+            self.observation_queue.put(obs)
 
-        # Now the plan is running, so we get an action from the threaded executor
-        logger.debug("mainloop: entering a blocking action_queue.get()")
-
-        # this flags that we are waiting for a new action to be computed
-        self.waiting_for_action.set()
+        logger.debug("mainloop: blocking on action_queue.get()")
         result = self.action_queue.get()
         ans_dict, agent_info = result
-        
+
         self.actions.append(ans_dict.get("action", None))
         self.memories.append(ans_dict.get("memory", None))
         self.thoughts.append(ans_dict.get("think", None))
@@ -337,16 +388,24 @@ does not support vision. Disabling use_screenshot."""
         return max_prompt_tokens, max_trunc_itr
 
 
-    # The executor runs in a thread
-    # note: ignore potentialconcurrency issues for now, we will fix them later.
-    # Here is where we define the executor actions.
+    # -------------------------------------------------------------------------
+    # Executor action primitives — each issues browser actions and waits for obs.
+    # These run in the executor thread, called from within exec(plan, ...).
+    # -------------------------------------------------------------------------
 
-    def clean_and_parse_executor_action(self, raw_action:str)->str:
+    def clean_and_parse_executor_action(self, raw_action: str):
+        """Parse the executor LLM's termination signal and return a Python value.
+
+        Returns:
+          str  — the extracted result string (report_result)
+          True — task completed successfully (done)
+          None — task is infeasible on this page/store (report_infeasible)
+          False — action was not a termination signal (should not reach callers)
+        """
         if "report_result" in raw_action:
-            # strip off ' and " and extract the report_result("result")" string
+            # Extract the argument from report_result(url="...") or report_result("text")
             if '=' in raw_action:
                 raw_action = raw_action.split("=")[1]
-                
             else:
                 raw_action = raw_action.split("(")[1].split(")")[0]
             raw_action = raw_action.split(")")[0].strip("""'" """)
@@ -354,62 +413,35 @@ does not support vision. Disabling use_screenshot."""
         elif 'done' in raw_action:
             return True
         elif 'report_infeasible' in raw_action:
-            return f"Infeasible: {raw_action}" 
+            # Return None so callers can use `if result:` to detect infeasibility.
+            # Previously returned a truthy "Infeasible: ..." string which caused
+            # infeasible stores to be appended to offer_urls in the plan.
+            return None
         else:
             return False
 
     def noop(self):
-        # make ans_dict
-        ans_dict = {
-            "action": "noop()",
-            "n_retry": 0,
-            "busted_retry": 0,
-        }
-        self.action_queue.put((ans_dict, self.last_agent_info))
-        return None
+        obs = self._execute_one_action("noop()")
+        self.obs_history.append(obs)
 
     def go_back(self):
-        ans_dict = {
-            "action": "go_back()",
-            "n_retry": 0,
-            "busted_retry": 0,
-        }
-        self.action_queue.put((ans_dict, self.last_agent_info))
-        return None
+        obs = self._execute_one_action("go_back()")
+        self.obs_history.append(obs)
 
     def go_forward(self):
-        ans_dict = {
-            "action": "go_forward()",
-            "n_retry": 0,
-            "busted_retry": 0,
-        }
-        self.action_queue.put((ans_dict, self.last_agent_info))
-        return None
+        obs = self._execute_one_action("go_forward()")
+        self.obs_history.append(obs)
 
     def open_page(self, url:str):
-        ans_dict = {
-            "action": "new_tab()",
-            "n_retry": 0,
-            "busted_retry": 0,
-        }
-        self.action_queue.put((ans_dict, self.last_agent_info))
-        ans_dict = {
-            "action": f"goto('{url}')",
-            "n_retry": 0,
-            "busted_retry": 0,
-        }
-        self.action_queue.put((ans_dict, self.last_agent_info))
-        return None
+        """Open url in a new tab. Appends the post-navigation obs to obs_history."""
+        self._execute_one_action("new_tab()")   # discard intermediate obs
+        obs = self._execute_one_action(f"goto('{url}')")
+        self.obs_history.append(obs)
 
     def close_page(self):
-        ans_dict = {
-            "action": "tab_close()",
-            "n_retry": 0,
-            "busted_retry": 0,
-        }
-        self.action_queue.put((ans_dict, self.last_agent_info))
-        return None
-    
+        obs = self._execute_one_action("tab_close()")
+        self.obs_history.append(obs)
+
 
     def navigate_to_page(self, description:str):
         """Navigate to a page that fits the given description. Return True if successful, False otherwise.
@@ -418,16 +450,16 @@ does not support vision. Disabling use_screenshot."""
         navigate_to_page("The home page of this website.")
         """
         self.reset()
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("navigate_to_page FINISHING: %s", ans_dict["action"])
-                
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("navigate_to_page CONTINUING: %s", ans_dict["action"])
+        logger.warning("navigate_to_page exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
-    
 
     def extract_information_from_page(self, description:str):
         """Extract text from the current page that fits the given description. Return the text as a string.
@@ -436,34 +468,39 @@ does not support vision. Disabling use_screenshot."""
         extract_information_from_page("The lowest price of the product.")
         """
         self.reset()
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("extract_information_from_page FINISHING: %s", ans_dict["action"])
-
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("extract_information_from_page CONTINUING: %s", ans_dict["action"])
-
+        logger.warning("extract_information_from_page exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
 
     def search_on_page(self, url:str, search_text:str):
-        """Open the search_page_url and search for the search_text. Return the best match page URL as a string, or None if not found.
+        """Navigate to url, search for search_text, and return the product page URL if an exact match is found, else None.
+
+        IMPORTANT: Do NOT call open_page(url) before this — search_on_page handles navigation internally.
+        Do NOT call extract_information_from_page after this — the returned URL IS the product page.
 
         Examples:
-        search_on_page("https://www.google.com", "Python")
+        url = search_on_page("http://localhost:8081", "Asus ROG Ryujin II 360mm")
+        if url:
+            offer_urls.append(url)
         """
         self.reset()
         self.open_page(url)
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("search_on_page FINISHING: %s", ans_dict["action"])
-
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("search_on_page CONTINUING: %s", ans_dict["action"])
-
+        logger.warning("search_on_page exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
 
     def add_to_cart(self, url:str, item_description:str):
@@ -475,13 +512,15 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         self.open_page(url)
 
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
-                logger.debug("add_to_cart FINISHING: %s", ans_dict["action"])                
+                logger.debug("add_to_cart FINISHING: %s", ans_dict["action"])
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("add_to_cart CONTINUING: %s", ans_dict["action"])
+        logger.warning("add_to_cart exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
 
     def checkout(self, payment_and_shipping_information:str):
@@ -491,14 +530,15 @@ does not support vision. Disabling use_screenshot."""
         checkout("A string containing payment information and shipping address") # while on a web shopping site with at least one item in the cart, returns True
         """
         self.reset()
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=checkout_prompt(payment_and_shipping_information))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("checkout FINISHING: %s", ans_dict["action"])
-
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("checkout CONTINUING: %s", ans_dict["action"])
+        logger.warning("checkout exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
 
     def fill_text_field(self, field_description:str, text:str)->bool:
@@ -508,16 +548,16 @@ does not support vision. Disabling use_screenshot."""
         fill_text_field("The email field", "example@example.com")
         """
         self.reset()
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=fill_text_field_prompt(field_description, text))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("fill_text_field FINISHING: %s", ans_dict["action"])
-
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("fill_text_field CONTINUING: %s", ans_dict["action"])
+        logger.warning("fill_text_field exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
-    
 
     def press_button(self, button_description:str)->bool:
         """Press the button with the given description. Return True if successful, False otherwise.
@@ -526,15 +566,16 @@ does not support vision. Disabling use_screenshot."""
         press_button("The submit button")
         """
         self.reset()
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=press_button_prompt(button_description))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("press_button FINISHING: %s", ans_dict["action"])
-
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("press_button CONTINUING: %s", ans_dict["action"])
- 
+        logger.warning("press_button exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
+
 
     def select_option(self, option_description:str)->bool:
         """Select the option with the given description. Return True if successful, False otherwise.
@@ -543,68 +584,55 @@ does not support vision. Disabling use_screenshot."""
         select_option("Ground shipping")
         """
         self.reset()
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(task_prompt=select_option_prompt(option_description))
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("select_option FINISHING: %s", ans_dict["action"])
-
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("select_option CONTINUING: %s", ans_dict["action"])
-    
+        logger.warning("select_option exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
 
     def generic_action(self, *args, **kwargs):
         self.reset()
-        while True:
+        for _step in range(self.max_executor_steps):
             ans_dict, agent_info = self.generic_action_step(*args, **kwargs)
             ans_dict["action"] = str(ans_dict["action"])
             if "report_result" in ans_dict["action"] or "done" in ans_dict["action"] or "report_infeasible" in ans_dict["action"]:
                 logger.debug("generic_action FINISHING: %s", ans_dict["action"])
-
                 return self.clean_and_parse_executor_action(ans_dict["action"])
             logger.debug("generic_action CONTINUING: %s", ans_dict["action"])
+        logger.warning("generic_action exceeded max_executor_steps (%d), giving up", self.max_executor_steps)
+        return None
 
-    
 
     def generic_action_step(self, *args, **kwargs):
-        logger.debug("Entering blocking observation queue.get()")
+        """Ask the executor LLM what to do next, execute the action, and wait for the obs.
 
-                # Get at least one observation from the queue
-        # We have to get at least one because otherwise we aren't waiting for the result of the previous action.
-        # There can be more than one if the previous action was hardcoded, such as opening a tab or going to a URL.
-        # wait for previous actions to be consumed in the main thread
-        time.sleep(0.5)
-        self.action_queue.join()
-        self.waiting_for_action.wait()
-        self.waiting_for_action.clear()
+        Uses obs_history[-1] (the current page state) for the LLM prompt.
+        If obs_history is empty (e.g. after reset() without a preceding open_page()),
+        falls back to self.last_obs.
+        """
+        # Ensure we have at least one observation in history for the LLM prompt.
+        if not self.obs_history:
+            if self.last_obs is not None:
+                self.obs_history.append(self.last_obs)
+            else:
+                raise RuntimeError("generic_action_step called with no observation available")
 
-        while not self.observation_queue.empty():
-            obs = self.observation_queue.get()
-            self.obs_history.append(obs)
-            self.observation_queue.task_done()
-
-            logger.debug("retrieved observation from queue, queue is empty: %s", self.observation_queue.empty())
-
-            if self.observation_queue.empty():
-                break
-        
-        
         task_prompt = kwargs.get("task_prompt", "")
         kwargs_copy = deepcopy(kwargs)
-        kwargs_copy.pop("task_prompt")
+        kwargs_copy.pop("task_prompt", None)
         logger.debug("task_prompt: %s", task_prompt)
+        logger.debug("actions: %d  obs_history: %d", len(self.actions), len(self.obs_history))
 
-        last_obs = deepcopy(self.obs_history[-1])
+        # Temporarily override the goal in the last obs for the LLM prompt, then restore it.
+        last_obs_backup = deepcopy(self.obs_history[-1])
         self.obs_history[-1]['goal'] = task_prompt.prompt
 
         system_prompt = SystemMessage(dp.SystemPrompt().prompt)
-        logger.debug(f"actions: {len(self.actions)}")
-        logger.debug(f"observation history: {len(self.obs_history)}")
-        #for a in self.actions:
-            #logger.debug(f"Final action: {str(a)[0:20]}")
-        #for o in self.obs_history:
-            #logger.debug(f"observation: {str(o)[0:20]}")
 
         main_prompt = ExecutorSystemPrompt(
                 self.executor_action_set,
@@ -617,7 +645,6 @@ does not support vision. Disabling use_screenshot."""
                 step=self.plan_step,
                 flags=self.flags,
                 )
-        #logger.debug("main_prompt: %s", main_prompt.prompt)
 
         max_prompt_tokens, max_trunc_itr = self._get_maxes()
 
@@ -639,7 +666,6 @@ does not support vision. Disabling use_screenshot."""
                 parser=main_prompt._parse_answer,
             )
             ans_dict["busted_retry"] = 0
-            # inferring the number of retries, TODO: make this less hacky
             ans_dict["n_retry"] = (len(chat_messages) - 3) / 2
         except ParseError as e:
             ans_dict = dict(
@@ -656,12 +682,18 @@ does not support vision. Disabling use_screenshot."""
             think=ans_dict.get("think", None),
             chat_messages=chat_messages,
             stats=stats,
-            extra_info={"executor_model_args": asdict(self.executor_model_args),# "eco_logits": eco_impacts.dict()
-            },
+            extra_info={"executor_model_args": asdict(self.executor_model_args)},
         )
         self.last_agent_info = agent_info
-        self.action_queue.put((ans_dict, agent_info))
-        self.obs_history[-1] = last_obs
+
+        # Restore the obs before appending the new one.
+        self.obs_history[-1] = last_obs_backup
+
+        # Execute the action and get the resulting observation.
+        # Strip meta-actions (done/report_result/report_infeasible) from the browser action —
+        # these are loop-termination signals for the executor, not real browser commands.
+        browser_action = self._to_browser_action(ans_dict["action"])
+        new_obs = self._execute_one_action(browser_action, agent_info)
+        self.obs_history.append(new_obs)
 
         return ans_dict, agent_info
-

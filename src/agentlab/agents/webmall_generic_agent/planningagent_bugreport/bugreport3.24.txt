@@ -1,0 +1,247 @@
+● PlanningAgent Development Report
+
+  Branch: main — WebMall PlanningAgent (webmall_generic_agent/)
+
+  ---
+  Starting Point
+
+  The PlanningAgent was a skeleton — the two-stage architecture (GPT-5 planner + GPT-4o executor) was sketched out but had never successfully completed a
+  task. Running run_single_task.py immediately produced a hard infinite loop, and every subsequent fix uncovered a new class of bug. The root cause of almost
+  everything was a fundamentally broken synchronization design between the executor thread and the BrowserGym main loop.
+
+  ---
+  The Architecture
+
+  Before understanding what was broken, it helps to understand what the agent is supposed to do:
+
+  BrowserGym loop (main thread)
+    → calls get_action(obs) each step
+    → expects one browser action string back
+
+  PlanningAgent
+    → Step 1 (Planner): GPT-5 reads the task, writes a Python plan
+    → Step 2 (Executor): plan runs in a background thread via exec()
+        → plan calls search_on_page(), add_to_cart(), etc.
+        → each of these calls generic_action_step() which:
+            (a) asks GPT-4o what browser action to take
+            (b) sends that action to the main thread
+            (c) waits for the resulting observation
+            (d) repeats until the sub-task is done
+
+  The fundamental tension: BrowserGym drives the loop one step at a time (pull model), but the executor wants to run a full Python program (push model). These
+   two need to stay in sync through queues.
+
+  ---
+  Bug 1: Infinite Loop (search_on_page CONTINUING)
+
+  Symptom: The terminal printed search_on_page CONTINUING: <action> forever. The agent never terminated.
+
+  Root cause: The original synchronization used action_queue.join() to wait for BrowserGym to consume an action before proceeding. But get_action() called
+  task_done() based on len(self.actions), and reset() (called at the start of each sub-task) cleared self.actions. After the first reset(), len(self.actions)
+  was always 0, so task_done() was never called, join() never returned, and the executor thread spun forever waiting.
+
+  Fix attempt: Added a _pending_puts counter to track unacknowledged queue entries. This solved the immediate deadlock but introduced a race condition.
+
+  ---
+  Bug 2: Deadlock at action_queue.get()
+
+  Symptom: After the first fix, the agent would hang indefinitely at mainloop: blocking on action_queue.get().
+
+  Root cause: The _pending_puts counter and waiting_for_action event were not properly synchronized. The executor thread would put an action in the queue but
+  the main thread's get_action() would miss the signal or check the condition at the wrong moment — classic TOCTOU race. The event would be set before
+  get_action() was called, then never signaled again.
+
+  ---
+  Bug 3: Race Condition — Stale Observations
+
+  Symptom: After removing join() entirely, the executor would navigate to Google or Amazon mid-task. The agent was using observations from before a navigation
+   had completed.
+
+  Root cause: Without join(), the executor thread would issue an action (e.g., goto('http://localhost:8081')) but immediately read back an old observation
+  from before the goto executed. The observation it saw was the previous page, so it thought it was still on the previous store and re-navigated elsewhere.
+
+  ---
+  The Core Redesign: _execute_one_action
+
+  All three bugs above shared one root cause: the synchronization was trying to track state (pending puts, events, join counts) that could get out of sync.
+  The fix was to eliminate all that state and use a simple request-response protocol:
+
+  def _execute_one_action(self, action_str: str) -> dict:
+      self.action_queue.put((ans_dict, info))   # send action to main thread
+      obs = self.observation_queue.get()         # block until obs comes back
+      return obs
+
+  And in get_action (main thread):
+  def get_action(self, obs):
+      if self.plan is None:
+          self.make_and_start_plan(obs)          # first call: start executor
+      else:
+          self.observation_queue.put(obs)        # unblock executor with new obs
+      result = self.action_queue.get()           # wait for executor's next action
+      return action_str, info
+
+  One action in, one observation out, fully sequential. No join, no events, no counters. This eliminated all three synchronization bugs in one redesign.
+
+  ---
+  Bug 4: Recursion Error in _put_action
+
+  Symptom: RecursionError: maximum recursion depth exceeded in _put_action.
+
+  Root cause: An earlier refactor used replace_all=True in an Edit tool call that accidentally made _put_action call itself recursively instead of calling
+  self.action_queue.put(). The method was literally replaced with a self-referencing call.
+
+  Fix: Manually corrected the method body to call self.action_queue.put(item).
+
+  ---
+  Bug 5: Cross-Tab URL Contamination
+
+  Symptom: When searching store 8083, the executor would report a URL from store 8082 (a tab that was already open from a previous search iteration).
+
+  Root cause: The executor LLM could see all open browser tabs in its context. When asked to find a product URL, it would read the URL from a different tab
+  where it had already found the product, instead of searching the current tab. The prompt had no constraint about which tab to use.
+
+  Fix: Added explicit instruction to search_on_page_prompt:
+  Only consider the CURRENT tab. Do NOT copy URLs from other browser tabs.
+
+  ---
+  Bug 6: _to_browser_action False Positive
+
+  Symptom: fill_text_field would send noop() to the browser instead of actually filling the field.
+
+  Root cause: The function that strips meta-actions from browser action strings (report_result, report_infeasible, done) used substring matching:
+  'report_infeasible' in line. When the plan asked the executor to fill a field with the text "Infeasible: report_infeasible()", that line was incorrectly
+  detected as a meta-action and stripped. The fill never executed.
+
+  Fix: Changed detection to startswith:
+  line.strip().startswith(k)  # k in ('report_result(', 'report_infeasible(', 'done(')
+  This ensures only lines that begin with a meta-action call are stripped, not lines where the keyword appears inside a string argument.
+
+  ---
+  Bug 7: report_infeasible Returning Truthy Value
+
+  Symptom: Stores where the product was not found would still have their "infeasibility string" appended to offer_urls. The final submission would contain
+  strings like "Infeasible: report_infeasible()" as if they were valid URLs.
+
+  Root cause: clean_and_parse_executor_action() returned "Infeasible: report_infeasible()" for the report_infeasible signal. In the plan, if found_url:
+  offer_urls.append(found_url) evaluated this truthy string as a valid URL.
+
+  Fix: Changed the return value to None:
+  elif 'report_infeasible' in raw_action:
+      return None  # callers use `if result:` to detect infeasibility
+
+  ---
+  Bug 8: Doubled Actions in Fill/Submit Steps
+
+  Symptom: Terminal showed every fill() call twice. The same text field was being filled twice in a row.
+
+  Root cause: When the executor LLM produced multiple Python code blocks (```python ... ```), extract_code_blocks concatenated all of them. A single LLM
+  response that had three code blocks would produce an action string with the fill appearing three times.
+
+  Fix: Added _ACTION_FORMAT_NOTE to all executor prompts:
+  Always respond using <action>...</action> XML tags. Do NOT use Python code blocks (```).
+  This forces parse_html_tags_raise to find exactly one <action> block per response, eliminating the concatenation issue.
+
+  ---
+  Bug 9: extract_information_from_page Returning True Instead of Text
+
+  Symptom: The plan would check if "Ryujin II" in title where title = True. The check always failed.
+
+  Root cause: The extract_information_from_page_prompt instructed the executor to respond with done() when finished. clean_and_parse_executor_action("done()")
+   returns True. So the "extracted text" was the boolean True, not the actual page content.
+
+  Fix: Changed the prompt to use report_result("the extracted text here") instead of done(), so the actual text is returned through the result-extraction
+  path.
+
+  ---
+  Bug 10: Executor Looping After Clicking Product Link
+
+  Symptom (score 0.5 run): After clicking a product link for store 8083 (checkpoint fired, product page loaded), the executor kept clicking the same bid again
+   for 9 more steps instead of calling report_result. Result: store 8083 timed out, only one URL submitted, score 0.5.
+
+  Root cause: The executor LLM saw the search results page in its action history, then saw the product page in the current observation, but still issued
+  another click(219) instead of reporting. The prompt had no explicit rule for "you already clicked a product link — stop clicking and report."
+
+  Fix: Restructured search_on_page_prompt with a FIRST CHECK step:
+  1. Check your action history first:
+     - If you already CLICKED a product link AND the current page is a product detail page,
+       you are ALREADY on the target page. Immediately report_result — DO NOT click again.
+  ...
+  Hard rule: After clicking a product link, the VERY NEXT action must be report_result.
+
+  ---
+  Bug 11: _to_browser_action(None) Crash
+
+  Symptom: AttributeError: 'NoneType' object has no attribute 'split' in _to_browser_action.
+
+  Root cause: When the executor LLM produces an unparseable response (e.g., calling scan(), an invalid action) and all retries fail, the ParseError handler
+  sets ans_dict["action"] = None. The call to _to_browser_action(None) then crashes on .split('\n').
+
+  Fix:
+  def _to_browser_action(self, action_str: str) -> str:
+      if action_str is None:
+          return 'noop()'
+      ...
+
+  ---
+  Bug 12: Overly Aggressive Search Counter (introduced and reverted)
+
+  Symptom (score 0.0 run): All four stores declared infeasible, score 0. The search counter cut off every store after 2 fill( actions.
+
+  Root cause (self-inflicted): A search_count counter was added to prevent store 8081's 4-search loop. It counted all fill( occurrences as "failed search
+  attempts." But the GPT-4o executor, on some runs, legitimately fills the search box, the search navigates correctly, and then on the next step still says
+  "no search performed" before recognizing the results. My counter saw 2 fills and declared infeasible before the LLM had a chance to recognize the results
+  page.
+
+  Fix: Reverted the counter entirely. The max_executor_steps=10 safety net is sufficient. Updated search_on_page docstring to prevent the GPT-5 planner from
+  generating redundant open_page calls before search_on_page (another contributing factor in the 0.0 run):
+  """IMPORTANT: Do NOT call open_page(url) before this — search_on_page handles
+  navigation internally. Do NOT call extract_information_from_page after this —
+  the returned URL IS the product page."""
+
+  ---
+  Summary of All Changes Made
+
+  ┌─────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────┐
+  │        File         │                                         Change                                          │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ planning_agent.py   │ Complete synchronization redesign: _execute_one_action queue protocol                   │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ planning_agent.py   │ _is_meta_action_line: startswith detection (Bug 6)                                      │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ planning_agent.py   │ clean_and_parse_executor_action: returns None for infeasible (Bug 7)                    │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ planning_agent.py   │ _to_browser_action: None guard (Bug 11)                                                 │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ planning_agent.py   │ search_on_page: clearer docstring to guide planner (Bug 12)                             │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ executor_prompts.py │ _ACTION_FORMAT_NOTE: forces <action> tags, eliminates doubled actions (Bug 8)           │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ executor_prompts.py │ search_on_page_prompt: FIRST CHECK step, current-tab rule, post-click rule (Bugs 5, 10) │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ executor_prompts.py │ extract_information_from_page_prompt: uses report_result not done() (Bug 9)             │
+  ├─────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+  │ run_single_task.py  │ max_steps=30 → 50 to give the plan room to complete                                     │
+  └─────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Current State Assessment
+
+  Working reliably:
+  - End-to-end task execution without crashes
+  - Synchronization between executor thread and BrowserGym main loop
+  - Score reporting, checkpoint evaluation, result persistence
+  - Find Specific Product tasks (scores 0.5–1.0 depending on LLM behavior)
+
+  Non-deterministic (by design):
+  - GPT-5 plan quality varies run to run — occasionally generates redundant steps
+  - GPT-4o executor sometimes loops on search pages before recognizing results
+  - Score on Task4 is typically 0.5 or 1.0; 0.0 is rare
+
+  Not yet tested:
+  - Cheapest product, vague product, add-to-cart, checkout task types
+  - checkout, add_to_cart, navigate_to_page executor functions are implemented but unvalidated
+  - Full study runner (run_webmall_study.py) with Ray parallelization and PlanningAgent
+  - Multi-seed result aggregation
+
+  Ready for: Systematic benchmarking of Find Specific Product tasks, and initial exploration of other task types with the expectation of debugging executor
+  prompts as new failure modes surface.
