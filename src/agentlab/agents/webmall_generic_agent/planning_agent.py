@@ -10,6 +10,7 @@ the agent, including model arguments and flags for various behaviors.
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from typing import Optional, Union
 from re import S
 import time
 from warnings import warn
@@ -129,7 +130,7 @@ class PlanningAgent(Agent):
         self.flags = flags
         self.planner_action_set = self.flags.action.planner_action_set.make_action_set()
         self.executor_action_set = self.flags.action.action_set.make_action_set()
-        self.waiting_for_action = threading.Event() # event to wait for the action to be finished
+        #self.waiting_for_action = threading.Event() # event to wait for the action to be finished
 
         self._obs_preprocessor = dp.make_obs_preprocessor(self.flags.obs)
 
@@ -224,7 +225,7 @@ class PlanningAgent(Agent):
             # launch the plan in a thread
             self.executor_thread_pool = ThreadPoolExecutor(max_workers=1)
             self.executor_thread_pool.submit(self.execute_plan, self.plan)
-            self.waiting_for_action.clear()
+            #self.waiting_for_action.clear()
             
         except Exception as e:
             logger.exception("Exception in planner: %s", e)
@@ -260,14 +261,32 @@ class PlanningAgent(Agent):
             logger.exception("Exception in executor: %s", e, exc_info=True)
 
         finished_action = {
-            "action": "noop()",
+            "action": "finished_plan()",
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((finished_action, None))
+        self.action_queue.put((finished_action, self.last_agent_info))
 
-
-                
+    
+    def safe_parse_int(self, value:Optional[str])->Union[int, float]:
+        if value is None:
+            return float("NaN")
+        
+        value = ''.join([v for v in value if v.isdigit()])
+        try:
+            return int(value)
+        except ValueError:
+            return float("NaN")
+    
+    def safe_parse_float(self, value:Optional[str])->float:
+        if value is None or value == "":
+            return float("NaN")
+        value = ''.join([v for v in value if v.isdigit()])
+        try:
+            return float(value)
+        except ValueError:
+            return float("NaN")
+    
     @cost_tracker_decorator
     def get_action(self, obs):
         """ The original get_action function
@@ -287,13 +306,21 @@ class PlanningAgent(Agent):
         logger.debug("mainloop: entering a blocking action_queue.get()")
 
         # this flags that we are waiting for a new action to be computed
-        self.waiting_for_action.set()
+        #self.waiting_for_action.set()
         ans_dict, agent_info  = self.action_queue.get()
         
+        if ans_dict.get("action", None) == "finished_plan()":
+            self.plan = None
+            self.plan_step = 0
+            ans_dict['action'] = "N/A"
+        
+        self.executor_thread_pool.shutdown(wait=False)
+
         self.actions.append(ans_dict.get("action", None))
         self.memories.append(ans_dict.get("memory", None))
         self.thoughts.append(ans_dict.get("think", None))
 
+        self.last_agent_info = agent_info
         return ans_dict["action"], agent_info
 
     def reset(self, seed=None):
@@ -440,21 +467,34 @@ does not support vision. Disabling use_screenshot."""
         final_result = None
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
+
+        self.action_queue.join()
         return final_result
 
     
 
-    def extract_information_from_page(self, description:str):
-        """Extract text from the current page that fits the given description. Return the text as a string.
+    def extract_information_from_page(self, description:str, _type:str="str"):
+        """Extract text from the current page that fits the given description and matches the given type.
+        Guaranteed to return a value of the given type or None if the information cannot be found.
 
         Examples:
-        extract_information_from_page("The lowest price of the product.")
+        extract_information_from_page("The lowest price of the product.", float)
         """
         self.action_queue.join()
         final_result = None
         self.reset()
         while not final_result:
-            ans_dict, agent_info = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description))
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description))
+        
+        if final_result is not None:
+            if _type == "int":
+                final_result = self.safe_parse_int(final_result)
+            elif _type == "float":
+                final_result = self.safe_parse_float(final_result)
+            elif _type == "str":
+                final_result = str(final_result)
+
+        self.action_queue.join()
         return final_result
 
     def search_on_page(self, url:str, search_text:str):
@@ -469,6 +509,8 @@ does not support vision. Disabling use_screenshot."""
         self.open_page(url)
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
+        
+        self.action_queue.join()
         return final_result
 
 
@@ -486,6 +528,8 @@ does not support vision. Disabling use_screenshot."""
 
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
+        
+        self.action_queue.join()
         return final_result
 
     def checkout(self, payment_and_shipping_information:str):
@@ -499,6 +543,8 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=checkout_prompt(payment_and_shipping_information))
+        
+        self.action_queue.join()
         return final_result
 
 
@@ -513,6 +559,8 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=fill_text_field_prompt(field_description, text))
+        
+        self.action_queue.join()
         return final_result
     
 
@@ -527,6 +575,8 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=press_button_prompt(button_description))
+        
+        self.action_queue.join()
         return final_result
  
 
@@ -541,6 +591,8 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=select_option_prompt(option_description))
+        
+        self.action_queue.join()
         return final_result
     
 
@@ -551,6 +603,8 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         while not final_result:
             ans_dict, agent_info, final_result = self.generic_action_step(*args, **kwargs)
+        
+        self.action_queue.join()
         return final_result
     
 
@@ -562,21 +616,20 @@ does not support vision. Disabling use_screenshot."""
         # There can be more than one if the previous action was hardcoded, such as opening a tab or going to a URL.
         # wait for previous actions to be consumed in the main thread
         self.action_queue.join()
-        self.waiting_for_action.wait()
-        self.waiting_for_action.clear()
 
         while not self.observation_queue.empty():
             obs = self.observation_queue.get()
             self.obs_history.append(obs)
             self.observation_queue.task_done()
-            self.all_obs_history += self.obs_history[:-(len(self.actions)+1)]
-            self.obs_history = self.obs_history[-(len(self.actions)+1):]
 
             logger.debug("retrieved observation from queue, queue is empty: %s", self.observation_queue.empty())
 
             if self.observation_queue.empty():
                 break
-        
+    
+        self.all_obs_history += self.obs_history[:-(len(self.actions)+1)]
+        self.obs_history = self.obs_history[-(len(self.actions)+1):]
+    
         # final_result is ONLY returned when the executor task is complete, meaning
         # done, report_result, or report_infeasible is present in the action (s).
         final_result = None
@@ -599,7 +652,7 @@ does not support vision. Disabling use_screenshot."""
             #logger.debug(f"Final action: {str(a)[0:20]}")
         #for o in self.obs_history:
             #logger.debug(f"observation: {str(o)[0:20]}")
-
+        logger.debug(f"task_prompt: {task_prompt.prompt}")
         main_prompt = ExecutorSystemPrompt(
                 self.executor_action_set,
                 goal=task_prompt,
@@ -646,10 +699,22 @@ does not support vision. Disabling use_screenshot."""
         # There can be more than one action here so we have to catch the rest of them and enqueue them
         # for example if we have the actions "report_result(url="url")\ntab_close()"" we want to set ans_dict['action'] to "tab_close()" and final_result to "url"
         clean_action = ''
+        final_result = None
         for line in ans_dict["action"].split("\n"):
             if "report_result" in line or "done" in line or "report_infeasible" in line:
                 logger.debug("navigate_to_page FINISHING: %s", line)
-                final_result = self.clean_and_parse_executor_action(line)
+                tmp = self.clean_and_parse_executor_action(line)
+                
+                # we have a common issue of done() and report_result() being used at the same time
+                # so we need to save the result of report_result and return it instead of True if done() is also returned
+                if final_result is None:
+                    final_result = tmp
+                    
+                elif type(final_result) == bool and type(tmp) == bool:
+                    final_result = final_result or tmp
+                
+                elif type(final_result) == bool and type(tmp) == str:
+                    final_result = tmp
             
             else:
                 clean_action += line + "\n"

@@ -526,7 +526,7 @@ class ExecutorGoalInstructions(PromptElement):
                 text=f"""\
 # Instructions
 Review the current state of the page and all other information to find the best
-possible next action to accomplish your goal. Your answer will be interpreted
+possible next action to accomplish your goal. Avoid repeating previous actions. Your answer will be interpreted
 and executed by a program, make sure to follow the formatting instructions.
 
 ## Goal:
@@ -726,9 +726,10 @@ results = []
 for store in stores:
     url_or_none = search_for_page(store, "Product P") # Return the product page URL or None if not found
     if url_or_none is not None:
-        price = extract_information_from_page("Lowest price of the product")
+        price = extract_information_from_page("Lowest price of the product", "float")
         results.append((url_or_none, price))
-
+    
+    close_page() # Remember to close each page after you use it to avoid confusion.
 selected_url = min(results, key=lambda x: x[1])[0]
 
 open_page("http://localhost:3000/")

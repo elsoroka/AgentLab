@@ -32,8 +32,7 @@ def navigate_to_page_prompt(description: str) -> str:
 
 def extract_information_from_page_prompt(description: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""On the current page, extract the information described by the following description: {description}.
-    Return the information as a string.
+    p._prompt = f"""On the current page, extract the information described by the following description: {description}. If the information is not on this page, report that the action is not possible.
     When finished, return
     <action>
     done()
@@ -47,7 +46,7 @@ def extract_information_from_page_prompt(description: str) -> str:
 
 def fill_text_field_prompt(field_description: str, text: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""On the current page, find the text field described by the following description: {field_description} with the following text: {text}.
+    p._prompt = f"""On the current page, find the text field described by the following description: {field_description} with the following text: {text}. If the text field is not on this page, report that the action is not possible.
 When finished, return
     <action>
     done()
@@ -61,7 +60,7 @@ When finished, return
 
 def press_button_prompt(button_description: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""On the current page, press the button described by the following description: {button_description}.
+    p._prompt = f"""On the current page, press the button described by the following description: {button_description}. If the button is not on this page, report that the action is not possible.
 When finished, return
     <action>
     done()
@@ -75,7 +74,7 @@ When finished, return
 
 def select_option_prompt(bid: str, options: str | list[str]) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""On the current page, select the option described by the following description: {bid} with the following options: {options}.
+    p._prompt = f"""On the current page, select the option described by the following description: {bid} with the following options: {options}. If the option is not on this page, report that the action is not possible.
     When finished, return
     <action>
     done()
@@ -89,7 +88,7 @@ def select_option_prompt(bid: str, options: str | list[str]) -> str:
 
 def add_to_cart_prompt(item_description: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""If the current page describes a product for sale, add it to the cart. If there are multiple variants of the product, use the following description to choose one: {item_description}.
+    p._prompt = f"""If the current page describes a product for sale, add it to the cart. If there are multiple variants of the product, use the following description to choose one: {item_description}. If the product is not on this page, report that the action is not possible.
     When finished, return
     <action>
     done()

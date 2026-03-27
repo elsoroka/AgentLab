@@ -86,7 +86,6 @@ def retry(
         #for m in messages:
             #print("retry:", m)
         answer = chat(messages)
-        print("retry: answer: %s", answer)
         # TODO: could we change this to not use inplace modifications ?
         messages.append(answer)
         try:
