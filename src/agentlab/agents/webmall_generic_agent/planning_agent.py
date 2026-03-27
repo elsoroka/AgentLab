@@ -58,7 +58,7 @@ class PlanningAgentArgs(AgentArgs):
     planner_model_args: BaseModelArgs = None
     executor_model_args: BaseModelArgs = None
     flags: PlannerPromptFlags = None
-    max_retry: int = 1
+    max_retry: int = 2
 
     def __post_init__(self):
         try:  # some attributes might be temporarily args.CrossProd for hyperparameter generation
@@ -115,7 +115,7 @@ class PlanningAgent(Agent):
         planner_model_args: BaseModelArgs,
         executor_model_args: BaseModelArgs,
         flags: PlannerPromptFlags,
-        max_retry: int = 1,
+        max_retry: int = 2,
     ):
         self.plan = None
         self.plan_step = 0
@@ -146,13 +146,6 @@ class PlanningAgent(Agent):
         self.all_thoughts = []
         self.all_obs_history = []
 
-        # action things
-        self.navigate_to_page = functools.partial(self.generic_action, task_prompt=navigate_to_page_prompt)
-        self.extract_information_from_page = functools.partial(self.generic_action, task_prompt=extract_information_from_page_prompt)
-        self.fill_text_field = functools.partial(self.generic_action, task_prompt=fill_text_field_prompt)
-        self.press_button = functools.partial(self.generic_action, task_prompt=press_button_prompt)
-        self.select_option = functools.partial(self.generic_action, task_prompt=select_option_prompt)
-        self.checkout = functools.partial(self.generic_action, task_prompt=checkout_prompt)
 
     def obs_preprocessor(self, obs: dict) -> dict:
         return self._obs_preprocessor(obs)
@@ -377,6 +370,7 @@ does not support vision. Disabling use_screenshot."""
 
     def noop(self):
         self.action_queue.join()
+        self.observation_queue.join()
         # make ans_dict
         ans_dict = {
             "action": "noop()",
@@ -389,6 +383,7 @@ does not support vision. Disabling use_screenshot."""
 
     def go_back(self):
         self.action_queue.join()
+        
         ans_dict = {
             "action": "go_back()",
             "n_retry": 0,
@@ -574,6 +569,8 @@ does not support vision. Disabling use_screenshot."""
             obs = self.observation_queue.get()
             self.obs_history.append(obs)
             self.observation_queue.task_done()
+            self.all_obs_history += self.obs_history[:-(len(self.actions)+1)]
+            self.obs_history = self.obs_history[-(len(self.actions)+1):]
 
             logger.debug("retrieved observation from queue, queue is empty: %s", self.observation_queue.empty())
 
