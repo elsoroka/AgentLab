@@ -3,7 +3,8 @@ from AgentLab.src.agentlab.agents.dynamic_prompting import PromptElement
 
 def search_on_page_prompt(search_text: str) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""Search for the product {search_text} and open the page of the best-matching result. Once you're on the page, return the URL of the best-matching result as a string and close the tab. Example:
+    p._prompt = f"""Search for the product {search_text} and open the page of the best-matching result. Once you're on the page, return the URL of the best-matching result as a string and close the tab.
+    Example:
     <action>
     report_result(url="https://www.example.com")
     tab_close()
@@ -13,6 +14,7 @@ def search_on_page_prompt(search_text: str) -> str:
     report_infeasible()
     tab_close()
     </action>
+    If search fails three times in a row, return report_infeasible() and close the tab. Don't keep trying the same thing over and over.
 """
     return p
 
@@ -27,6 +29,7 @@ def navigate_to_page_prompt(description: str) -> str:
     <action>
     report_infeasible()
     </action>
+    If navigation fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -41,6 +44,7 @@ def extract_information_from_page_prompt(description: str) -> str:
     <action>
     report_infeasible()
     </action>
+    If extraction fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -55,6 +59,7 @@ When finished, return
     <action>
     report_infeasible()
     </action>
+    If filling the text field fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -69,6 +74,7 @@ When finished, return
     <action>
     report_infeasible()
     </action>
+    If pressing the button fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -83,6 +89,7 @@ def select_option_prompt(bid: str, options: str | list[str]) -> str:
     <action>
     report_infeasible()
     </action>
+    If selecting the option fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -97,6 +104,7 @@ def add_to_cart_prompt(item_description: str) -> str:
     <action>
     report_infeasible()
     </action>
+    If adding to the cart fails three times in a row return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -111,5 +119,6 @@ When finished, return
     <action>
     report_infeasible()
     </action>
+    If checkout fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
