@@ -154,6 +154,17 @@ class PlanningAgent(Agent):
         self.all_thoughts = []
         self.all_obs_history = []
 
+        self.dummy_agent_info = AgentInfo(
+            think=None,
+            chat_messages=None,
+            stats=dict(
+                total_tokens=0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_cost=0,
+            ),
+            extra_info={},
+        )
 
     def obs_preprocessor(self, obs: dict) -> dict:
         return self._obs_preprocessor(obs)
@@ -229,7 +240,6 @@ class PlanningAgent(Agent):
                 },
             )
 
-            self.last_agent_info = agent_info
             self.obs_history.pop()
 
             # launch the plan in a thread
@@ -275,7 +285,7 @@ class PlanningAgent(Agent):
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((finished_action, self.last_agent_info))
+        self.action_queue.put((finished_action, self.dummy_agent_info))
 
     
     def safe_parse_int(self, value:Optional[str])->Union[int, float]:
@@ -353,7 +363,6 @@ class PlanningAgent(Agent):
         self.memories.append(ans_dict.get("memory", None))
         self.thoughts.append(ans_dict.get("think", None))
 
-        self.last_agent_info = agent_info
         return ans_dict["action"], agent_info
 
     def reset(self, seed=None):
@@ -439,7 +448,7 @@ does not support vision. Disabling use_screenshot."""
             "busted_retry": 0,
         }
         # TODO the self.last_agent_info is a stupid hack to stop the AgentLab framework from crashing.
-        self.action_queue.put((ans_dict, self.last_agent_info))
+        self.action_queue.put((ans_dict, self.dummy_agent_info))
         return None
 
     def go_back(self):
@@ -450,7 +459,7 @@ does not support vision. Disabling use_screenshot."""
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((ans_dict, self.last_agent_info))
+        self.action_queue.put((ans_dict, self.dummy_agent_info))
         return None
 
     def go_forward(self):
@@ -460,7 +469,7 @@ does not support vision. Disabling use_screenshot."""
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((ans_dict, self.last_agent_info))
+        self.action_queue.put((ans_dict, self.dummy_agent_info))
         return None
 
     def open_page(self, url:str):
@@ -470,13 +479,13 @@ does not support vision. Disabling use_screenshot."""
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((ans_dict, self.last_agent_info))
+        self.action_queue.put((ans_dict, self.dummy_agent_info))
         ans_dict = {
             "action": f"goto('{url}')",
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((ans_dict, self.last_agent_info))
+        self.action_queue.put((ans_dict, self.dummy_agent_info))
         return None
 
     def close_page(self):
@@ -486,7 +495,7 @@ does not support vision. Disabling use_screenshot."""
             "n_retry": 0,
             "busted_retry": 0,
         }
-        self.action_queue.put((ans_dict, self.last_agent_info))
+        self.action_queue.put((ans_dict, self.dummy_agent_info))
         return None
     
 
@@ -767,7 +776,6 @@ does not support vision. Disabling use_screenshot."""
             extra_info={"executor_model_args": asdict(self.executor_model_args),# "eco_logits": eco_impacts.dict()
             },
         )
-        self.last_agent_info = agent_info
 
         if clean_action != '':
             self.action_queue.put((ans_dict, agent_info))
