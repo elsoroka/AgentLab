@@ -19,15 +19,6 @@ import logging
 import bgym
 
 logger = logging.getLogger(__name__)
-# logger config to allow debug messages
-logging.basicConfig(level=logging.DEBUG)
-# allow messages from threads
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler()
-handler.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
 
 from browsergym.experiments.agent import Agent, AgentInfo
 from browsergym.experiments.benchmark.configs import DEFAULT_HIGHLEVEL_ACTION_SET_ARGS
@@ -344,14 +335,14 @@ class PlanningAgent(Agent):
             self.plan = None
             self.plan_step = 0
             ans_dict['action'] = None
-            logger.debug("finished_plan() received, stopping executor thread.")
+            logger.info("finished_plan() received, stopping executor thread.")
 
         # If we have reached the step limit, signal the executor thread to stop.
         # Call task_done for the action we just got (normally done at the start of the next
         # get_action call), then drain any buffered actions so the executor's action_queue.join()
         # unblocks and the thread can exit cleanly.
         if self.get_action_count >= self.max_steps:
-            logger.debug("Step limit (%d) reached; signalling executor to stop.", self.max_steps)
+            logger.info("Step limit (%d) reached; signalling executor to stop.", self.max_steps)
             self._stop_event.set()
             #try:
                 #self.action_queue.task_done()
@@ -387,7 +378,7 @@ class PlanningAgent(Agent):
         self.thoughts = []
         self.actions = []
         self.obs_history = []
-        logger.debug(f"{'='*20} OBS HISTORY AND ACTION HISTORY HAS BEEN RESET {'='*20}")
+        logger.info(f"{'='*20} OBS HISTORY AND ACTION HISTORY HAS BEEN RESET {'='*20}")
 
     def _check_flag_constancy(self):
         flags = self.flags
@@ -527,7 +518,7 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
 
         #self.action_queue.join()
-        logger.debug(f"navigate_to_page({description}) returned {final_result}")
+        logger.info(f"navigate_to_page({description}) returned {final_result}")
         if type(final_result) != bool:
             return False
         return final_result
@@ -548,7 +539,7 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description, _type))
         
         raw_result = final_result
-        logger.debug(f"extract_information_from_page({description}) returned raw result {raw_result}")
+        logger.info(f"extract_information_from_page({description}) returned raw result {raw_result}")
         if final_result is not None and final_result is not False:
             if _type == "int":
                 final_result = self.safe_parse_int(final_result)
@@ -561,7 +552,7 @@ does not support vision. Disabling use_screenshot."""
             final_result = None
 
         #self.action_queue.join()
-        logger.debug(f"extract_information_from_page({description}) returned {final_result} from raw result {raw_result}")
+        logger.info(f"extract_information_from_page({description}) returned {final_result} from raw result {raw_result}")
         return final_result
 
     def search_on_page(self, url:str, search_text:str, selection_criteria):
@@ -578,7 +569,7 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text, selection_criteria))
         
         #self.action_queue.join()
-        logger.debug(f"search_on_page({url}, {search_text}, {selection_criteria}) returned {final_result}")
+        logger.info(f"search_on_page({url}, {search_text}, {selection_criteria}) returned {final_result}")
         if type(final_result) != str:
             return None
         
@@ -603,6 +594,7 @@ does not support vision. Disabling use_screenshot."""
         #self.action_queue.join()
         if type(final_result) != bool:
             return False
+        logger.info(f"add_to_cart({url}, {item_description}) returned {final_result}")
         return final_result
 
     def checkout(self, payment_and_shipping_information:str):
@@ -620,6 +612,7 @@ does not support vision. Disabling use_screenshot."""
         #self.action_queue.join()
         if type(final_result) != bool:
             return False
+        logger.info(f"checkout({payment_and_shipping_information}) returned {final_result}")
         return final_result
 
 
@@ -638,6 +631,7 @@ does not support vision. Disabling use_screenshot."""
         #self.action_queue.join()
         if type(final_result) != bool:
             return False
+        logger.info(f"fill_text_field({field_description}, {text}) returned {final_result}")
         return final_result
     
 
@@ -656,6 +650,7 @@ does not support vision. Disabling use_screenshot."""
         #self.action_queue.join()
         if type(final_result) != bool:
             return False
+        logger.info(f"press_button({button_description}) returned {final_result}")
         return final_result
  
 
@@ -674,6 +669,7 @@ does not support vision. Disabling use_screenshot."""
         #self.action_queue.join()
         if type(final_result) != bool:
             return False
+        logger.info(f"select_option({option_description}) returned {final_result}")
         return final_result
     
 
@@ -794,7 +790,6 @@ does not support vision. Disabling use_screenshot."""
 
         for line in ans_dict["action"].split("\n"):
             if "report_result" in line or "done" in line or "report_infeasible" in line:
-                logger.debug("navigate_to_page FINISHING: %s", line)
                 if final_result is None:
                     final_result = self.clean_and_parse_executor_action(line)
                 # we have a common issue of done() and report_result() being used at the same time
