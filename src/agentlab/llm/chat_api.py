@@ -91,6 +91,19 @@ class OpenRouterModelArgs(BaseModelArgs):
 
 
 @dataclass
+class StanfordModelArgs(BaseModelArgs):
+    """Serializable object for instantiating a chat model via the Stanford AI Playground API."""
+
+    def make_model(self):
+        return StanfordChatModel(
+            model_name=self.model_name,
+            temperature=self.temperature,
+            max_tokens=self.max_new_tokens,
+            log_probs=self.log_probs,
+        )
+
+
+@dataclass
 class OpenAIModelArgs(BaseModelArgs):
     """Serializable object for instantiating a generic chat model with an OpenAI
     model."""
@@ -390,6 +403,37 @@ class OpenRouterChatModel(ChatModel):
             client_class=OpenAI,
             client_args=client_args,
             pricing_func=tracking.get_pricing_openrouter,
+            log_probs=log_probs,
+        )
+
+
+class StanfordChatModel(ChatModel):
+    """Chat model using the Stanford AI Playground API (OpenAI-compatible)."""
+
+    def __init__(
+        self,
+        model_name,
+        api_key=None,
+        temperature=0.5,
+        max_tokens=100,
+        max_retry=4,
+        min_retry_wait_time=60,
+        log_probs=False,
+    ):
+        client_args = {
+            "base_url": "https://aiapi-prod.stanford.edu/v1",
+        }
+        super().__init__(
+            model_name=model_name,
+            api_key=api_key,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retry=max_retry,
+            min_retry_wait_time=min_retry_wait_time,
+            api_key_env_var="STANFORD_API_KEY",
+            client_class=OpenAI,
+            client_args=client_args,
+            pricing_func=None,
             log_probs=log_probs,
         )
 

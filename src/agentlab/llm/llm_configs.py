@@ -7,6 +7,7 @@ from agentlab.llm.chat_api import (
     OpenRouterModelArgs,
     SelfHostedModelArgs,
     AnthropicModelArgs,
+    StanfordModelArgs,
 )
 
 default_oss_llms_args = {
@@ -372,6 +373,53 @@ CHAT_MODEL_ARGS_DICT = {
         max_total_tokens=200_000,
         max_input_tokens=100_000 - 4_000,
         max_new_tokens=4_000,
+        temperature=1e-1,
+    ),
+    # ---------------- Stanford AI Playground ----------------#
+    "stanford/claude-3-7-sonnet": StanfordModelArgs(
+        model_name="claude-3-7-sonnet",
+        max_total_tokens=200_000,
+        max_input_tokens=200_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+        vision_support=True,
+    ),
+    #"stanford/claude-sonnet-4-5": StanfordModelArgs(
+        #model_name="claude-sonnet-4-5",
+        #max_total_tokens=200_000,
+        #max_input_tokens=200_000,
+        #max_new_tokens=16_384,
+        #temperature=1e-1,
+        #vision_support=True,
+    #),
+    "stanford/gpt-4o": StanfordModelArgs(
+        model_name="gpt-4o",
+        max_total_tokens=128_000,
+        max_input_tokens=128_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+        vision_support=True,
+    ),
+    "stanford/gpt-4o-mini": StanfordModelArgs(
+        model_name="gpt-4,omini",
+        max_total_tokens=128_000,
+        max_input_tokens=128_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+        vision_support=True,
+    ),
+    "stanford/deepseek-r1": StanfordModelArgs(
+        model_name="deepseek-r1",
+        max_total_tokens=128_000,
+        max_input_tokens=100_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+    ),
+    "stanford/o3-mini": StanfordModelArgs(
+        model_name="o3-mini",
+        max_total_tokens=200_000,
+        max_input_tokens=200_000,
+        max_new_tokens=100_000,
         temperature=1e-1,
     ),
 }
