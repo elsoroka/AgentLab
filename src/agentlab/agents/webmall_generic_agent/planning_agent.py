@@ -204,11 +204,14 @@ class PlanningAgent(Agent):
                 parser=main_prompt._parse_answer,
             )
             stats = self.planner_llm.get_stats()
-            if "<plan>" in ans_dict["plan"]:
-                self.plan = ans_dict["plan"].split("<plan>")[1].split("</plan>")[0]
-            else:
-                self.plan = ans_dict["plan"]
-
+            self.plan = ans_dict["plan"]
+            if "<plan>" in self.plan:
+                self.plan = self.plan.split("<plan>")[1].split("</plan>")[0]
+            if '```' in self.plan:
+                self.plan = self.plan.strip('`')
+            if self.plan.startswith('python'):
+                self.plan = self.plan.split("python")[1]
+            self.plan = self.plan.strip()
             self.plan_step = 0
             logger.info("plan: %s", self.plan)
             planner_stats = self.planner_llm.get_stats()
@@ -304,11 +307,15 @@ class PlanningAgent(Agent):
         self.get_action_count += 1
 
         if len(self.actions) > 0 or len(self.all_actions) > 0:
-            self.action_queue.task_done() # corresponds to the previous action
+            try:
+                self.action_queue.task_done() # corresponds to the previous action
+            except Exception:
+                pass
 
         self.observation_queue.put(obs)
 
         if self.plan is None:
+            self.get_action_count = 0
             self.make_and_start_plan(obs)
 
         # Now the plan is running, so we get an action from the threaded executor
@@ -319,22 +326,26 @@ class PlanningAgent(Agent):
         if ans_dict.get("action", None) == "finished_plan()":
             self.plan = None
             self.plan_step = 0
-            ans_dict['action'] = "N/A"
+            ans_dict['action'] = None
+            logger.debug("finished_plan() received, stopping executor thread.")
 
         # If we have reached the step limit, signal the executor thread to stop.
         # Call task_done for the action we just got (normally done at the start of the next
         # get_action call), then drain any buffered actions so the executor's action_queue.join()
         # unblocks and the thread can exit cleanly.
         if self.get_action_count >= self.max_steps:
-            logger.info("Step limit (%d) reached; signalling executor to stop.", self.max_steps)
+            logger.debug("Step limit (%d) reached; signalling executor to stop.", self.max_steps)
             self._stop_event.set()
-            self.action_queue.task_done()
-            while not self.action_queue.empty():
-                try:
-                    self.action_queue.get_nowait()
-                    self.action_queue.task_done()
-                except Exception:
-                    break
+            #try:
+                #self.action_queue.task_done()
+            #except Exception:
+                #pass
+            #while not self.action_queue.empty():
+                #try:
+                    #self.action_queue.get_nowait()
+                    #self.action_queue.task_done()
+                #except Exception:
+                    #break
 
         self.executor_thread_pool.shutdown(wait=False)
 
@@ -412,9 +423,9 @@ does not support vision. Disabling use_screenshot."""
             raw_action = raw_action.split(")")[0].strip("""'" """)
             return raw_action
         elif 'done' in raw_action:
-            return raw_action
+            return True
         elif 'report_infeasible' in raw_action:
-            return f"Infeasible: {raw_action}" 
+            return False
         else:
             return None
 
@@ -488,7 +499,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.join()
         self.reset()
         final_result = None
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
 
         #self.action_queue.join()
@@ -506,7 +517,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.join()
         final_result = None
         self.reset()
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description))
         
         if final_result is not None:
@@ -530,7 +541,7 @@ does not support vision. Disabling use_screenshot."""
         final_result = None
         self.reset()
         self.open_page(url)
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
         
         #self.action_queue.join()
@@ -549,7 +560,7 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         self.open_page(url)
 
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
         
         #self.action_queue.join()
@@ -564,7 +575,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.join()
         final_result = None
         self.reset()
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=checkout_prompt(payment_and_shipping_information))
         
         #self.action_queue.join()
@@ -580,7 +591,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.join()
         final_result = None
         self.reset()
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=fill_text_field_prompt(field_description, text))
         
         #self.action_queue.join()
@@ -596,7 +607,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.join()
         final_result = None
         self.reset()
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=press_button_prompt(button_description))
         
         #self.action_queue.join()
@@ -612,7 +623,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.join()
         final_result = None
         self.reset()
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=select_option_prompt(option_description))
         
         #self.action_queue.join()
@@ -624,7 +635,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.join()
         final_result = None
         self.reset()
-        while not final_result and not self._stop_event.is_set():
+        while final_result is None and not self._stop_event.is_set():
             ans_dict, agent_info, final_result = self.generic_action_step(*args, **kwargs)
         
         #self.action_queue.join()
@@ -656,6 +667,10 @@ does not support vision. Disabling use_screenshot."""
     
         self.all_obs_history += self.obs_history[:-(len(self.actions)+1)]
         self.obs_history = self.obs_history[-(len(self.actions)+1):]
+
+        # make sure there is always an observation, better to have an old one than none
+        if len(self.obs_history) == 0:
+            self.obs_history.append(self.all_obs_history[-1])
     
         # final_result is ONLY returned when the executor task is complete, meaning
         # done, report_result, or report_infeasible is present in the action (s).
@@ -664,7 +679,7 @@ does not support vision. Disabling use_screenshot."""
         task_prompt = kwargs.get("task_prompt", "")
         kwargs_copy = deepcopy(kwargs)
         kwargs_copy.pop("task_prompt")
-        logger.debug("task_prompt: %s", task_prompt)
+        logger.debug("task_prompt: %s", task_prompt.prompt)
 
         # Another stupid hack
         # without this, we cannot remove the high-level goal ("find x product", "purchase x product", etc. from the prompt)
@@ -730,12 +745,14 @@ does not support vision. Disabling use_screenshot."""
         for line in ans_dict["action"].split("\n"):
             if "report_result" in line or "done" in line or "report_infeasible" in line:
                 logger.debug("navigate_to_page FINISHING: %s", line)
-                final_result = self.clean_and_parse_executor_action(line)
+                if final_result is None:
+                    final_result = self.clean_and_parse_executor_action(line)
                 # we have a common issue of done() and report_result() being used at the same time
                 # so we need to save the result of report_result and return it instead of True if done() is also returned
-            
+
             else:
                 clean_action += line + "\n"
+
         print(f"{'='*20} CLEAN ACTION: {clean_action} {'='*20}")
         ans_dict["action"] = clean_action
 
@@ -751,7 +768,9 @@ does not support vision. Disabling use_screenshot."""
             },
         )
         self.last_agent_info = agent_info
-        self.action_queue.put((ans_dict, agent_info))
+
+        if clean_action != '':
+            self.action_queue.put((ans_dict, agent_info))
         self.obs_history[-1] = last_obs
 
         return ans_dict, agent_info, final_result
