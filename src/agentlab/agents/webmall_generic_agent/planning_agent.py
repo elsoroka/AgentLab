@@ -59,8 +59,8 @@ class PlanningAgentArgs(AgentArgs):
     planner_model_args: BaseModelArgs = None
     executor_model_args: BaseModelArgs = None
     flags: PlannerPromptFlags = None
-    max_retry: int = 2
-    max_steps: int = 30
+    max_retry: int = 1
+    max_steps: int = 60
 
     def __post_init__(self):
         try:  # some attributes might be temporarily args.CrossProd for hyperparameter generation
