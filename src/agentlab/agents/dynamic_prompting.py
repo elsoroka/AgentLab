@@ -636,7 +636,14 @@ or click and wait for the reaction of the page.
 
 class PlannerSystemPromptElement(PromptElement):
     _prompt = """\
-You are an expert planner. Your task is to write a plan in Python code to automate a web interaction task. Do not solve the task yourself: only write the plan."""
+You are an expert planner. Your task is to write a plan in Python code to automate a web interaction task. Do not solve the task yourself: only write the plan.
+An LLM will execute your functions and it can fail, so pay attention to the return values of functions. If a 
+function can return None, check for this case in your code.
+
+Hints:
+You can only return one URL from search_on_page, so you need to use the selection_criteria to pick the correct result.
+For example, if you are looking for the cheapest product, use selection criteria "Cheapest match".
+"""
 
 class SystemPrompt(PromptElement):
     _prompt = """\

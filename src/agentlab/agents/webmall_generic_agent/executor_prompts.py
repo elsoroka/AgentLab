@@ -1,9 +1,9 @@
 from AgentLab.src.agentlab.agents.dynamic_prompting import PromptElement
 
 
-def search_on_page_prompt(search_text: str) -> str:
+def search_on_page_prompt(search_text: str, selection_criteria="best match") -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""Search for the product {search_text} and open the page of the best-matching result. Once you're on the page, return the URL of the best-matching result as a string.
+    p._prompt = f"""Search for the product {search_text} and open the page of the result that best matches the selection criteria: {selection_criteria}. Once you're on the page, return the URL of the best-matching result as a string.
     Example:
     <action>
     report_result(url="https://www.example.com")
@@ -31,12 +31,13 @@ def navigate_to_page_prompt(description: str) -> str:
 """
     return p
 
-def extract_information_from_page_prompt(description: str) -> str:
+def extract_information_from_page_prompt(description: str, _type:str="str") -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""On the current page, extract the information described by the following description: {description}. If the information is not on this page, report that the action is not possible.
+    p._prompt = f"""On the current page, extract the information described by the following description: {description} and return it as a {_type} using the function report_result() If the information is not on this page, return report_infeasible().
+    If you return a number, make sure to remove all non-numeric characters and punctuation first.
     When finished, return
     <action>
-    done()
+    report_result(result)
     </action>
     If the action is not possible, return
     <action>

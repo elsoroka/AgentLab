@@ -275,6 +275,7 @@ class PlanningAgent(Agent):
                 "generic_action":self.generic_action,
                 "add_to_cart":self.add_to_cart,
                 "checkout":self.checkout,
+                "get_open_tabs":self.get_open_tabs,
             })
         except Exception as e:
             # print the traceback
@@ -300,12 +301,18 @@ class PlanningAgent(Agent):
     
     def safe_parse_float(self, value:Optional[str])->float:
         if value is None or value == "":
-            return float("NaN")
-        value = ''.join([v for v in value if v.isdigit()])
+            return None
+        value = ''.join([v for v in value if v.isdigit() or v == '.' or v == ','])
+        # is this one of them that swaps the use of a comma and a decimal point?
+        if len(value.split(',')[-1]) == 2:
+            if '.' in value:
+                value = value.replace('.', '')
+            value = value.replace(',', '.')
+        
         try:
             return float(value)
         except ValueError:
-            return float("NaN")
+            return None
     
     @cost_tracker_decorator
     def get_action(self, obs):
@@ -314,8 +321,6 @@ class PlanningAgent(Agent):
         the planner/executor consume observations from the observation queue and produce actions on the action queue.
         this function puts the new observation in the observation queue and consumes an action from the action queue.
         """
-        self.get_action_count += 1
-
         if len(self.actions) > 0 or len(self.all_actions) > 0:
             try:
                 self.action_queue.task_done() # corresponds to the previous action
@@ -327,6 +332,8 @@ class PlanningAgent(Agent):
         if self.plan is None:
             self.get_action_count = 0
             self.make_and_start_plan(obs)
+
+        self.get_action_count += 1
 
         # Now the plan is running, so we get an action from the threaded executor
         logger.debug("mainloop: entering a blocking action_queue.get()")
@@ -438,6 +445,14 @@ does not support vision. Disabling use_screenshot."""
         else:
             return None
 
+    def get_open_tabs(self) -> list[str]:
+        """Return URLs of all currently open tabs, based on the latest observation."""
+        if self.obs_history:
+            return list(self.obs_history[-1].get("open_pages_urls", []))
+        if self.all_obs_history:
+            return list(self.all_obs_history[-1].get("open_pages_urls", []))
+        return []
+
     def noop(self):
         self.action_queue.join()
         self.observation_queue.join()
@@ -474,11 +489,12 @@ does not support vision. Disabling use_screenshot."""
 
     def open_page(self, url:str):
         self.action_queue.join()
+
         ans_dict = {
-            "action": "new_tab()",
-            "n_retry": 0,
-            "busted_retry": 0,
-        }
+                "action": "new_tab()",
+                "n_retry": 0,
+                "busted_retry": 0,
+            }
         self.action_queue.put((ans_dict, self.dummy_agent_info))
         ans_dict = {
             "action": f"goto('{url}')",
@@ -486,17 +502,16 @@ does not support vision. Disabling use_screenshot."""
             "busted_retry": 0,
         }
         self.action_queue.put((ans_dict, self.dummy_agent_info))
-        return None
+        return True
 
     def close_page(self):
-        self.action_queue.join()
         ans_dict = {
-            "action": "tab_close()",
+            "action": f"tab_close()",
             "n_retry": 0,
             "busted_retry": 0,
         }
         self.action_queue.put((ans_dict, self.dummy_agent_info))
-        return None
+        return True
     
 
     def navigate_to_page(self, description:str):
@@ -512,6 +527,9 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
 
         #self.action_queue.join()
+        logger.debug(f"navigate_to_page({description}) returned {final_result}")
+        if type(final_result) != bool:
+            return False
         return final_result
 
     
@@ -527,20 +545,26 @@ does not support vision. Disabling use_screenshot."""
         final_result = None
         self.reset()
         while final_result is None and not self._stop_event.is_set():
-            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description))
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description, _type))
         
-        if final_result is not None:
+        raw_result = final_result
+        logger.debug(f"extract_information_from_page({description}) returned raw result {raw_result}")
+        if final_result is not None and final_result is not False:
             if _type == "int":
                 final_result = self.safe_parse_int(final_result)
             elif _type == "float":
                 final_result = self.safe_parse_float(final_result)
             elif _type == "str":
                 final_result = str(final_result)
+        
+        else:
+            final_result = None
 
         #self.action_queue.join()
+        logger.debug(f"extract_information_from_page({description}) returned {final_result} from raw result {raw_result}")
         return final_result
 
-    def search_on_page(self, url:str, search_text:str):
+    def search_on_page(self, url:str, search_text:str, selection_criteria):
         """Open the search_page_url and search for the search_text. Return the best match page URL as a string, or None if not found.
 
         Examples:
@@ -551,9 +575,13 @@ does not support vision. Disabling use_screenshot."""
         self.reset()
         self.open_page(url)
         while final_result is None and not self._stop_event.is_set():
-            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text))
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text, selection_criteria))
         
         #self.action_queue.join()
+        logger.debug(f"search_on_page({url}, {search_text}, {selection_criteria}) returned {final_result}")
+        if type(final_result) != str:
+            return None
+        
         return final_result
 
 
@@ -573,6 +601,8 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=add_to_cart_prompt(item_description))
         
         #self.action_queue.join()
+        if type(final_result) != bool:
+            return False
         return final_result
 
     def checkout(self, payment_and_shipping_information:str):
@@ -588,6 +618,8 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=checkout_prompt(payment_and_shipping_information))
         
         #self.action_queue.join()
+        if type(final_result) != bool:
+            return False
         return final_result
 
 
@@ -604,6 +636,8 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=fill_text_field_prompt(field_description, text))
         
         #self.action_queue.join()
+        if type(final_result) != bool:
+            return False
         return final_result
     
 
@@ -620,6 +654,8 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=press_button_prompt(button_description))
         
         #self.action_queue.join()
+        if type(final_result) != bool:
+            return False
         return final_result
  
 
@@ -636,6 +672,8 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=select_option_prompt(option_description))
         
         #self.action_queue.join()
+        if type(final_result) != bool:
+            return False
         return final_result
     
 
@@ -751,6 +789,9 @@ does not support vision. Disabling use_screenshot."""
         # for example if we have the actions "report_result(url="url")\ntab_close()"" we want to set ans_dict['action'] to "tab_close()" and final_result to "url"
         clean_action = ''
         final_result = None
+        if ans_dict['action'] is None:
+            ans_dict['action'] = ''
+
         for line in ans_dict["action"].split("\n"):
             if "report_result" in line or "done" in line or "report_infeasible" in line:
                 logger.debug("navigate_to_page FINISHING: %s", line)

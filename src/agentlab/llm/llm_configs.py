@@ -376,22 +376,8 @@ CHAT_MODEL_ARGS_DICT = {
         temperature=1e-1,
     ),
     # ---------------- Stanford AI Playground ----------------#
-    "stanford/claude-3-7-sonnet": StanfordModelArgs(
-        model_name="claude-3-7-sonnet",
-        max_total_tokens=200_000,
-        max_input_tokens=200_000,
-        max_new_tokens=16_384,
-        temperature=1e-1,
-        vision_support=True,
-    ),
-    #"stanford/claude-sonnet-4-5": StanfordModelArgs(
-        #model_name="claude-sonnet-4-5",
-        #max_total_tokens=200_000,
-        #max_input_tokens=200_000,
-        #max_new_tokens=16_384,
-        #temperature=1e-1,
-        #vision_support=True,
-    #),
+    # models: gpt-4.omini', 'gpt-4', 'deepseek-r1', 'claude-3-5-sonnet', 'claude-3-7-sonnet', 'claude-3-haiku', 
+   # 'gemini-2.0-flash-lite-001', 'gemini-2.0-flash-001', 'llama-3.2', 'gpt-4o', 'o1', 'o3-mini'
     "stanford/gpt-4o": StanfordModelArgs(
         model_name="gpt-4o",
         max_total_tokens=128_000,
@@ -408,6 +394,13 @@ CHAT_MODEL_ARGS_DICT = {
         temperature=1e-1,
         vision_support=True,
     ),
+    "stanford/o3-mini": StanfordModelArgs(
+        model_name="o3-mini",
+        max_total_tokens=200_000,
+        max_input_tokens=200_000,
+        max_new_tokens=100_000,
+        temperature=1e-1,
+    ),
     "stanford/deepseek-r1": StanfordModelArgs(
         model_name="deepseek-r1",
         max_total_tokens=128_000,
@@ -415,11 +408,44 @@ CHAT_MODEL_ARGS_DICT = {
         max_new_tokens=16_384,
         temperature=1e-1,
     ),
-    "stanford/o3-mini": StanfordModelArgs(
-        model_name="o3-mini",
+    "stanford/claude-3-7-sonnet": StanfordModelArgs(
+        model_name="claude-3-7-sonnet",
         max_total_tokens=200_000,
         max_input_tokens=200_000,
-        max_new_tokens=100_000,
+        max_new_tokens=16_384,
         temperature=1e-1,
+        vision_support=True,
+    ),
+    "stanford/claude-4-sonnet": StanfordModelArgs(
+        model_name="claude-4-sonnet",
+        max_total_tokens=200_000,
+        max_input_tokens=200_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+        vision_support=True,
+    ),
+    "stanford/claude-3-haiku": StanfordModelArgs(
+        model_name="claude-3-haiku",
+        max_total_tokens=200_000,
+        max_input_tokens=200_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+        vision_support=True,
+    ),
+    "stanford/gemini-2.0-flash-lite-001": StanfordModelArgs(
+        model_name="gemini-2.0-flash-lite-001",
+        max_total_tokens=200_000,
+        max_input_tokens=200_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+        vision_support=False,
+    ),
+    "stanford/gemini-2.0-flash-001": StanfordModelArgs(
+        model_name="gemini-2.0-flash-001",
+        max_total_tokens=200_000,
+        max_input_tokens=200_000,
+        max_new_tokens=16_384,
+        temperature=1e-1,
+        vision_support=False,
     ),
 }
