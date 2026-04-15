@@ -646,6 +646,46 @@ It's better to have a more general search text and put specific constraints in `
 Remember that search_on_page returns a string of URLs separated by ###, not a list.
 """
 
+class NlPlanningSystemPrompt(PromptElement):
+    _prompt = """\
+You are an expert web navigation planner. Your role is to analyze a task goal and \
+create a concise high-level strategy. You do not execute actions yourself; you provide \
+a plan that a web agent will follow step by step."""
+
+
+class NlPlanGoalPrompt(PromptElement):
+    """Prompt element that asks the LLM to produce a high-level natural language plan."""
+
+    def __init__(self, goal_object, visible: bool = True) -> None:
+        super().__init__(visible)
+        self._prompt = [
+            dict(
+                type="text",
+                text="""\
+Given the task goal below, write a concise high-level plan as a numbered list of steps. \
+Each step should describe a logical phase of the task (e.g., "Search for product X on store Y", \
+"Compare prices across stores", "Add the cheapest option to cart"). \
+Focus on strategy, not low-level browser interactions.
+
+## Goal:
+""",
+            )
+        ]
+        self._prompt += goal_object
+        self._prompt += [
+            dict(
+                type="text",
+                text="\n\nProvide your plan inside <plan> tags.",
+            )
+        ]
+
+    def _parse_answer(self, text_answer):
+        try:
+            return parse_html_tags_raise(text_answer, keys=["plan"])
+        except ParseError:
+            return {"plan": text_answer}
+
+
 class SystemPrompt(PromptElement):
     _prompt = """\
 You are an agent trying to solve a web task based on the content of the page and
