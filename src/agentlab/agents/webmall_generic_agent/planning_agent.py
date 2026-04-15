@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Optional, Union
 from re import S
-import time
+import time, json
 from warnings import warn
 import functools
 import logging
@@ -51,13 +51,31 @@ class PlanningAgentArgs(AgentArgs):
     executor_model_args: BaseModelArgs = None
     flags: PlannerPromptFlags = None
     max_retry: int = 1
-    max_steps: int = 60
+    max_steps: int = 50 # 50 matches the WebMall paper
+    plan_from_file = None
 
     def __post_init__(self):
+        self.keyed_plans = dict()
+
         try:  # some attributes might be temporarily args.CrossProd for hyperparameter generation
             self.agent_name = f"PlanningAgent-{self.planner_model_args.model_name}-{self.executor_model_args.model_name}".replace("/", "_")
         except AttributeError:
             pass
+            
+        if self.plan_from_file:
+            self.load_plan_from_file(self.plan_from_file)
+
+    def load_plan_from_file(self, plan_from_file: str):
+        with open(plan_from_file, 'r') as file:
+            data = [json.loads(line) for line in file.readlines()]
+        if data[0].keys() != data[1].keys():
+            # data [0] is config
+            data = data[1:]
+        
+        self.keyed_plans = dict()
+        for plan in data:
+            self.keyed_plans[plan['id']] = plan['clean_response'] if 'clean_response' in plan else None
+        
 
     def set_benchmark(self, benchmark: bgym.Benchmark, demo_mode):
         """Override Some flags based on the benchmark."""
@@ -99,6 +117,7 @@ class PlanningAgentArgs(AgentArgs):
             flags=self.flags,
             max_retry=self.max_retry,
             max_steps=self.max_steps,
+            keyed_plans=self.keyed_plans if len(self.keyed_plans) > 0 else None
         )
 
 
@@ -111,20 +130,26 @@ class PlanningAgent(Agent):
         flags: PlannerPromptFlags,
         max_retry: int = 2,
         max_steps: int = 30,
+        keyed_plans: dict = None,
     ):
         self.plan = None
         self.plan_step = 0
+        self.keyed_plans = keyed_plans
 
-        self.planner_llm = planner_model_args.make_model()
+        if not self.keyed_plans:
+            self.planner_llm = planner_model_args.make_model()
+        
         self.executor_llm = executor_model_args.make_model()
         self.planner_model_args = planner_model_args
         self.executor_model_args = executor_model_args
         self.max_retry = max_retry
         self.max_steps = max_steps
         self.get_action_count = 0
+        self.keyed_plans = keyed_plans
 
         self.flags = flags
-        self.planner_action_set = self.flags.action.planner_action_set.make_action_set()
+        if not self.keyed_plans:
+            self.planner_action_set = self.flags.action.planner_action_set.make_action_set()
         self.executor_action_set = self.flags.action.action_set.make_action_set()
 
         self._obs_preprocessor = dp.make_obs_preprocessor(self.flags.obs)
@@ -189,24 +214,37 @@ class PlanningAgent(Agent):
                 flags=self.flags,
             )
 
-            max_prompt_tokens, max_trunc_itr = self._get_maxes()
+            if not self.keyed_plans:
+                max_prompt_tokens, max_trunc_itr = self._get_maxes()
 
-            human_prompt = dp.fit_tokens(
-                shrinkable=main_prompt,
-                max_prompt_tokens=max_prompt_tokens,
-                model_name=self.planner_model_args.model_name,
-                max_iterations=max_trunc_itr,
-                additional_prompts=[],
-            )
-            chat_messages = Discussion([system_prompt, human_prompt])
-            ans_dict = retry(
+                human_prompt = dp.fit_tokens(
+                    shrinkable=main_prompt,
+                    max_prompt_tokens=max_prompt_tokens,
+                    model_name=self.planner_model_args.model_name,
+                    max_iterations=max_trunc_itr,
+                    additional_prompts=[],
+                )
+                chat_messages = Discussion([system_prompt, human_prompt])
+                
+                ans_dict = retry(
                 self.planner_llm,
                 chat_messages,
                 n_retry=self.max_retry,
                 parser=main_prompt._parse_answer,
-            )
-            stats = self.planner_llm.get_stats()
-            self.plan = ans_dict["plan"]
+                )
+                planner_stats = self.planner_llm.get_stats()
+                self.plan = ans_dict["plan"]
+            
+            else:
+                self.plan = self.keyed_plans[obs["task_id"]]
+                # TODO fix we would need to import a tokenizer to count the tokens in the plan
+                planner_stats = dict(
+                    total_tokens=0,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_cost=0,
+                )
+            
             if "<plan>" in self.plan:
                 self.plan = self.plan.split("<plan>")[1].split("</plan>")[0]
             if '```' in self.plan:
@@ -216,7 +254,7 @@ class PlanningAgent(Agent):
             self.plan = self.plan.strip()
             self.plan_step = 0
             logger.info("plan: %s", self.plan)
-            planner_stats = self.planner_llm.get_stats()
+
             planner_stats["n_retry"] = self.max_retry + 1
             planner_stats["busted_retry"] = 1
             model_args = self.planner_model_args
@@ -226,7 +264,7 @@ class PlanningAgent(Agent):
             agent_info = AgentInfo(
                 think=ans_dict.get("think", None),
                 chat_messages=chat_messages,
-                stats=stats,
+                stats=planner_stats,
                 extra_info={"planner_stats": planner_stats, "chat_model_args": asdict(model_args), #"eco_logits": eco_impacts.dict()
                 },
             )
@@ -518,9 +556,10 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=navigate_to_page_prompt(description))
 
         #self.action_queue.join()
-        logger.info(f"navigate_to_page({description}) returned {final_result}")
+        
         if type(final_result) != bool:
-            return False
+            final_result = False
+        logger.info(f"navigate_to_page({description}) returned {final_result}")
         return final_result
 
     
@@ -555,12 +594,15 @@ does not support vision. Disabling use_screenshot."""
         logger.info(f"extract_information_from_page({description}) returned {final_result} from raw result {raw_result}")
         return final_result
 
-    def search_on_page(self, url:str, search_text:str, selection_criteria):
-        """Open the search_page_url and search for the search_text. Return the best match page URL as a string, or None if not found.
+    def search_on_page(self, url:str=None, search_text:str=None, selection_criteria='', search_page_url:str=None)->Optional[list[str]]:
+        """Open the search_page_url and search for the search_text. Return a list of page URLs that matche the selection criteria as a string, or None if not found.
 
         Examples:
         search_on_page("https://www.google.com", "Python")
         """
+        # stupid hack here, we should really fix the planner to not do this
+        if not url:
+            url =  search_page_url
         self.action_queue.join()
         final_result = None
         self.reset()
@@ -569,10 +611,10 @@ does not support vision. Disabling use_screenshot."""
             ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text, selection_criteria))
         
         #self.action_queue.join()
-        logger.info(f"search_on_page({url}, {search_text}, {selection_criteria}) returned {final_result}")
-        if type(final_result) != str:
-            return None
         
+        if type(final_result) != str:
+            final_result = ''
+        logger.info(f"search_on_page({url}, {search_text}, {selection_criteria}) returned {final_result}")
         return final_result
 
 
@@ -593,8 +635,8 @@ does not support vision. Disabling use_screenshot."""
         
         #self.action_queue.join()
         if type(final_result) != bool:
-            return False
-        logger.info(f"add_to_cart({url}, {item_description}) returned {final_result}")
+            final_result = False
+        logger.info(f"add_to_cart({item_description}) returned {final_result}")
         return final_result
 
     def checkout(self, payment_and_shipping_information:str):
@@ -611,7 +653,7 @@ does not support vision. Disabling use_screenshot."""
         
         #self.action_queue.join()
         if type(final_result) != bool:
-            return False
+            final_result = False
         logger.info(f"checkout({payment_and_shipping_information}) returned {final_result}")
         return final_result
 
@@ -630,7 +672,7 @@ does not support vision. Disabling use_screenshot."""
         
         #self.action_queue.join()
         if type(final_result) != bool:
-            return False
+            final_result = False
         logger.info(f"fill_text_field({field_description}, {text}) returned {final_result}")
         return final_result
     
@@ -649,7 +691,7 @@ does not support vision. Disabling use_screenshot."""
         
         #self.action_queue.join()
         if type(final_result) != bool:
-            return False
+            final_result = False
         logger.info(f"press_button({button_description}) returned {final_result}")
         return final_result
  
@@ -668,7 +710,7 @@ does not support vision. Disabling use_screenshot."""
         
         #self.action_queue.join()
         if type(final_result) != bool:
-            return False
+            final_result = False
         logger.info(f"select_option({option_description}) returned {final_result}")
         return final_result
     
@@ -728,6 +770,7 @@ does not support vision. Disabling use_screenshot."""
         # without this, we cannot remove the high-level goal ("find x product", "purchase x product", etc. from the prompt)
         # this replaces the high-level goal with the executor's subgoal (e.g. "search for x", "find y information on this page")
         last_obs = deepcopy(self.obs_history[-1])
+        high_level_goal = last_obs.get("goal", "")
         self.obs_history[-1]['goal'] = task_prompt.prompt
 
         system_prompt = SystemMessage(dp.SystemPrompt().prompt)
@@ -798,7 +841,7 @@ does not support vision. Disabling use_screenshot."""
             else:
                 clean_action += line + "\n"
 
-        print(f"{'='*20} CLEAN ACTION: {clean_action} {'='*20}")
+        #print(f"{'='*20} CLEAN ACTION: {clean_action} {'='*20}")
         ans_dict["action"] = clean_action
 
         stats = self.executor_llm.get_stats()

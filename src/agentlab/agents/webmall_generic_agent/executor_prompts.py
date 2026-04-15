@@ -3,10 +3,10 @@ from AgentLab.src.agentlab.agents.dynamic_prompting import PromptElement
 
 def search_on_page_prompt(search_text: str, selection_criteria="best match") -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""Search for the product {search_text} and open the page of the result that best matches the selection criteria: {selection_criteria}. Once you're on the page, return the URL of the best-matching result as a string.
+    p._prompt = f"""Search for the product {search_text} and gather the URLS for the pages that best match the selection criteria: {selection_criteria}. If more than one URL matches, return the URLS as a string separated by ###.
     Example:
     <action>
-    report_result(url="https://www.example.com")
+    report_result(url="https://www.example1.com###https://www.example2.com")
     </action>
     If the action is not possible, return
     <action>
@@ -110,6 +110,7 @@ def add_to_cart_prompt(item_description: str) -> str:
 def checkout_prompt(payment_and_shipping_information: str) -> str:
     p = PromptElement(visible=True)
     p._prompt = f"""From the current page, check out the items in the cart. Provide the following payment and shipping information: {payment_and_shipping_information}.
+    Finally, finish the checkout process.
 When finished, return
     <action>
     done()

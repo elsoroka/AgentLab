@@ -102,19 +102,45 @@ class ExecutorSystemPrompt(MainPrompt):
 {self.obs.prompt}\
 {self.history.prompt}\
 {self.action_prompt.prompt}\
+{self.hints.prompt}\
+{self.be_cautious.prompt}\
 {self.think.prompt}\
 {self.plan.prompt}\
 {self.memory.prompt}\
+{self.criticise.prompt}\
 """
-# left out caution and critique for now
         )
 
-        #__prompt = """You are an expert web navigator. Your task is to choose the most appropriate Python function to call for the given webpage content and task.
-#"""
+        if self.flags.use_abstract_example:
+            prompt.add_text(
+                f"""
+# Abstract Example
 
-#        if self.flags.use_abstract_example:
-            #prompt.add_text(__prompt)
-        
+Here is an abstract version of the answer with description of the content of
+each tag. Make sure you follow this structure, but replace the content with your
+answer:
+{self.think.abstract_ex}\
+{self.plan.abstract_ex}\
+{self.memory.abstract_ex}\
+{self.criticise.abstract_ex}\
+{self.action_prompt.abstract_ex}\
+"""
+            )
+
+        if self.flags.use_concrete_example:
+            prompt.add_text(
+                f"""
+# Concrete Example
+
+Here is a concrete example of how to format your answer.
+Make sure to follow the template with proper tags:
+{self.think.concrete_ex}\
+{self.plan.concrete_ex}\
+{self.memory.concrete_ex}\
+{self.criticise.concrete_ex}\
+{self.action_prompt.concrete_ex}\
+"""
+            )
         return self.obs.add_screenshot(prompt)
 
 

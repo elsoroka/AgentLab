@@ -636,13 +636,14 @@ or click and wait for the reaction of the page.
 
 class PlannerSystemPromptElement(PromptElement):
     _prompt = """\
-You are an expert planner. Your task is to write a plan in Python code to automate a web interaction task. Do not solve the task yourself: only write the plan.
+You are an expert planner. Your task is to write a plan in Python code to automate a web interaction task. An LLM agent will execute your functions. Do not solve the task yourself: only write the plan.
 An LLM will execute your functions and it can fail, so pay attention to the return values of functions. If a 
 function can return None, check for this case in your code.
 
 Hints:
-You can only return one URL from search_on_page, so you need to use the selection_criteria to pick the correct result.
-For example, if you are looking for the cheapest product, use selection criteria "Cheapest match".
+When you search for a product using search_on_page, provide all the constraints to the searcher LLM in `selection_criteria` so it can pick the correct product from the search results.
+It's better to have a more general search text and put specific constraints in `selection_criteria`.
+Remember that search_on_page returns a string of URLs separated by ###, not a list.
 """
 
 class SystemPrompt(PromptElement):
@@ -731,12 +732,13 @@ stores = ["http://localhost:8081/", "http://localhost:8082/", "http://localhost:
 results = []
 
 for store in stores:
-    url_or_none = search_for_page(store, "Product P") # Return the product page URL or None if not found
-    if url_or_none is not None:
+    open_page(store)
+    urls = search_for_page(store, "Product P", "Cheapest match") # Return the product page URL or None if not found
+    for url in urls.split("###"):
         price = extract_information_from_page("Lowest price of the product", "float")
         results.append((url_or_none, price))
     
-    close_page() # Remember to close each page after you use it to avoid confusion.
+    close_page() # Close the page or load a new one with goto(url)
 selected_url = min(results, key=lambda x: x[1])[0]
 
 open_page("http://localhost:3000/")
