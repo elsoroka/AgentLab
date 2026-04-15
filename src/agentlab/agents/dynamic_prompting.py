@@ -664,8 +664,14 @@ class NlPlanGoalPrompt(PromptElement):
                 text="""\
 Given the task goal below, write a concise high-level plan as a numbered list of steps. \
 Each step should describe a logical phase of the task (e.g., "Search for product X on store Y", \
-"Compare prices across stores", "Add the cheapest option to cart"). \
+"1. Search for Product P on Store S", "2. Add the cheapest option to cart"). \
 Focus on strategy, not low-level browser interactions.
+
+Make sure each step is self-contained with all the information necessary to execute it.
+The steps will be provided to an LLM agent, and only one step will be visible at a time.
+After each step, the LLM agent will make a note on its progress so it can retain information from previous steps.
+
+Separate each step from the next with \n\n.
 
 ## Goal:
 """,

@@ -1,15 +1,17 @@
 """
-GenericAgent implementation for AgentLab
+NlPlanningAgent implementation for AgentLab
 
-This module defines a `GenericAgent` class and its associated arguments for use in the AgentLab framework. \
-The `GenericAgent` class is designed to interact with a chat-based model to determine actions based on \
+This module defines a `NlPlanningAgent` class and its associated arguments for use in the AgentLab framework. \
+The `NlPlanningAgent` class is designed to interact with a chat-based model to determine actions based on \
 observations. It includes methods for preprocessing observations, generating actions, and managing internal \
-state such as plans, memories, and thoughts. The `GenericAgentArgs` class provides configuration options for \
+state such as plans, memories, and thoughts. The `NlPlanningAgentArgs` class provides configuration options for \
 the agent, including model arguments and flags for various behaviors.
 """
 
 import logging
 from copy import deepcopy
+
+from Browsergym.browsergym.experiments.src.browsergym.experiments.benchmark.configs import DEFAULT_HIGHLEVEL_ACTION_SET_ARGS
 
 logger = logging.getLogger(__name__)
 from dataclasses import asdict, dataclass
@@ -27,6 +29,7 @@ from agentlab.llm.tracking import cost_tracker_decorator
 
 
 from .generic_agent_prompt import GenericPromptFlags, MainPrompt
+from .nl_planning_agent_prompt import NlPlanningStepPrompt
 
 @dataclass
 class NlPlanningAgentArgs(AgentArgs):
@@ -36,7 +39,7 @@ class NlPlanningAgentArgs(AgentArgs):
 
     def __post_init__(self):
         try:  # some attributes might be temporarily args.CrossProd for hyperparameter generation
-            self.agent_name = f"GenericAgent-{self.chat_model_args.model_name}".replace("/", "_")
+            self.agent_name = f"NlPlanningAgent-{self.chat_model_args.model_name}".replace("/", "_")
         except AttributeError:
             pass
 
@@ -46,7 +49,8 @@ class NlPlanningAgentArgs(AgentArgs):
             self.flags.obs.use_html = True
 
         self.flags.obs.use_tabs = benchmark.is_multi_tab
-        self.flags.action.action_set = deepcopy(benchmark.high_level_action_set_args)
+        self.flags.action.action_set = deepcopy(DEFAULT_HIGHLEVEL_ACTION_SET_ARGS["nlplannerhighlevel"])
+        # use nlplannerwebarena
 
         # for backward compatibility with old traces
         if self.flags.action.multi_actions is not None:
@@ -93,7 +97,12 @@ class NlPlanningAgent(Agent):
         self._check_flag_constancy()
         self.reset(seed=None)
 
-    def _generate_nl_plan(self, obs) -> str:
+        self.full_obs_history = []
+        self.full_action_history = []
+        self.full_memories = []
+        self.full_thoughts = []
+
+    def _generate_nl_plan(self, obs) -> list[str]:
         """Call the LLM once to produce a high-level natural language plan for the task."""
         goal_object = obs.get("goal_object", [{"type": "text", "text": str(obs.get("goal", ""))}])
         system_prompt = SystemMessage(dp.NlPlanningSystemPrompt().prompt)
@@ -102,9 +111,12 @@ class NlPlanningAgent(Agent):
 
         def parse_plan(text):
             try:
-                return parse_html_tags_raise(text, keys=["plan"])
+                result = parse_html_tags_raise(text, keys=["plan"])
+                steps = [line.strip() for line in result["plan"].splitlines() if line.strip()]
+                return {"plan": steps}
             except ParseError:
-                return {"plan": text}
+                logger.error(f"_generate_nl_plan: failed to parse plan: {text}")
+                return {"plan": [text]}
 
         ans_dict = llm_retry(
             self.chat_llm,
@@ -112,6 +124,7 @@ class NlPlanningAgent(Agent):
             n_retry=self.max_retry,
             parser=parse_plan,
         )
+        logger.info(f"_generate_nl_plan: plan is {ans_dict.get('plan', 'No plan generated')}")
         return ans_dict.get("plan", "No plan generated")
 
     def obs_preprocessor(self, obs: dict) -> dict:
@@ -123,12 +136,15 @@ class NlPlanningAgent(Agent):
         self.obs_history.append(obs)
 
         # On the first step, generate a high-level NL plan before acting.
-        if self.nl_plan is None:
-            self.nl_plan = self._generate_nl_plan(obs)
-            self.plan = self.nl_plan
+        if self.high_level_plan is None:
+            self.high_level_plan = self._generate_nl_plan(obs)
+            self.plan = self.high_level_plan[0]
+            self.plan_step = 0
 
-        main_prompt = MainPrompt(
+        current_step_idx = max(0, min(self.plan_step, len(self.high_level_plan) - 1))
+        main_prompt = NlPlanningStepPrompt(
             action_set=self.action_set,
+            current_step=self.high_level_plan[current_step_idx],
             obs_history=self.obs_history,
             actions=self.actions,
             memories=self.memories,
@@ -170,12 +186,45 @@ class NlPlanningAgent(Agent):
                 busted_retry=1,
             )
 
+        # did we get the next_step action?
+        if ans_dict["action"] is not None:
+            for line in ans_dict["action"].split("\n"):
+                line = line.strip()
+                if line.startswith("go_to_next_step("):
+                    notes = line.split("(")[1].split(")")[0]
+                    self.notes_from_previous_step.append(notes)
+
+                    self.plan_step += 1
+
+                    # clear and save histories
+                    self.full_action_history += self.actions
+                    self.full_obs_history += self.obs_history
+                    self.obs_history = self.obs_history[-1:]
+                    self.actions = []
+                    self.full_memories += self.memories
+                    self.full_thoughts += self.thoughts
+                    self.memories = self.notes_from_previous_step
+                    self.thoughts = []
+                    
+                    logger.info(f"go_to_next_step: notes from previous step: {notes}")
+                    logger.info(f"next step is {self.plan_step}/{len(self.high_level_plan)}: {self.high_level_plan[self.plan_step]}")
+
         stats = self.chat_llm.get_stats()
         stats["n_retry"] = ans_dict["n_retry"]
         stats["busted_retry"] = ans_dict["busted_retry"]
 
         self.plan = ans_dict.get("plan", self.plan)
-        self.plan_step = ans_dict.get("step", self.plan_step)
+
+        step_val = ans_dict.get("step", self.plan_step)
+        try:
+            new_step = int(step_val)
+        except (ValueError, TypeError):
+            new_step = self.plan_step
+        # If the step advanced, seed self.plan from the next high-level step
+        if new_step != self.plan_step and self.high_level_plan is not None:
+            new_idx = max(0, min(new_step, len(self.high_level_plan) - 1))
+            self.plan = self.high_level_plan[new_idx]
+        self.plan_step = new_step
         self.actions.append(ans_dict["action"])
         self.memories.append(ans_dict.get("memory", None))
         self.thoughts.append(ans_dict.get("think", None))
@@ -190,7 +239,8 @@ class NlPlanningAgent(Agent):
 
     def reset(self, seed=None):
         self.seed = seed
-        self.nl_plan = None
+        self.high_level_plan = None
+        self.notes_from_previous_step = []
         self.plan = "No plan yet"
         self.plan_step = -1
         self.memories = []
