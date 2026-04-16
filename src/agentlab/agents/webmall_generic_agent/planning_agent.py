@@ -86,7 +86,7 @@ class PlanningAgentArgs(AgentArgs):
         self.flags.action.planner_action_set = deepcopy(DEFAULT_HIGHLEVEL_ACTION_SET_ARGS["plannerhighlevel"])
 
         self.flags.obs.use_tabs = benchmark.is_multi_tab
-        self.flags.action.action_set = deepcopy(benchmark.high_level_action_set_args)
+        self.flags.action.action_set = deepcopy(DEFAULT_HIGHLEVEL_ACTION_SET_ARGS["executorwebarena"])
 
         # for backward compatibility with old traces
         if self.flags.action.multi_actions is not None:
