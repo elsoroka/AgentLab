@@ -129,7 +129,7 @@ class PlanningAgent(Agent):
         executor_model_args: BaseModelArgs,
         flags: PlannerPromptFlags,
         max_retry: int = 2,
-        max_steps: int = 30,
+        max_steps: int = 50,
         keyed_plans: dict = None,
     ):
         self.plan = None
@@ -841,7 +841,6 @@ does not support vision. Disabling use_screenshot."""
             else:
                 clean_action += line + "\n"
 
-        #print(f"{'='*20} CLEAN ACTION: {clean_action} {'='*20}")
         ans_dict["action"] = clean_action
 
         stats = self.executor_llm.get_stats()

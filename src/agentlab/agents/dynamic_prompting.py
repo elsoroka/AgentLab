@@ -23,6 +23,7 @@ import bgym
 from bgym import HighLevelActionSetArgs
 from browsergym.core.action.base import AbstractActionSet
 from browsergym.utils.obs import flatten_axtree_to_str, flatten_dom_to_str, overlay_som, prune_html
+from agentlab.llm.llm_utils import HumanMessage, parse_html_tags_raise
 
 from agentlab.llm.llm_utils import (
     BaseMessage,
@@ -655,7 +656,23 @@ a plan that a web agent will follow step by step."""
 
 class NlPlanGoalPrompt(PromptElement):
     """Prompt element that asks the LLM to produce a high-level natural language plan."""
+    _concrete_ex = """Example: Make a plan to find the cheapest offer for Product P.
+<plan>
+1. Check "http://localhost:8081/" for Product P and make a note of both the URL of the cheapest offer and its price.
 
+2. Check "http://localhost:8082/" for Product P and make a note of both the URL of the cheapest offer and its price.
+
+3. Check "http://localhost:8083/" for Product P and make a note of both the URL of the cheapest offer and its price.
+
+4. Check "http://localhost:8084/" for Product P and make a note of both the URL of the cheapest offer and its price.
+
+5. Open the page at "http://localhost:3000/"
+
+6. Select the cheapest offer from the results. If more than one offer has the same price, select all of them. Then fill the text field "Solution field" with the URL of the cheapest offer. If more than one offer is found, return all URLS separated by ###.
+
+7. Press the button "Submit Final Result".
+</plan>
+"""
     def __init__(self, goal_object, visible: bool = True) -> None:
         super().__init__(visible)
         self._prompt = [
@@ -667,14 +684,14 @@ Each step should describe a logical phase of the task (e.g., "Search for product
 "1. Search for Product P on Store S", "2. Add the cheapest option to cart"). \
 Focus on strategy, not low-level browser interactions.
 
+In your plan, refer to specific web URLs for stores, product names, and requirements for products. Only use the four provided webshops and the solutions page. Do not visit any other websites.
 Make sure each step is self-contained with all the information necessary to execute it.
 The steps will be provided to an LLM agent, and only one step will be visible at a time.
 After each step, the LLM agent will make a note on its progress so it can retain information from previous steps.
 
-Separate each step from the next with \n\n.
+Separate each step from the next with \\n\\n.
 
-## Goal:
-""",
+## Goal:""",
             )
         ]
         self._prompt += goal_object
@@ -682,6 +699,12 @@ Separate each step from the next with \n\n.
             dict(
                 type="text",
                 text="\n\nProvide your plan inside <plan> tags.",
+            )
+        ]
+        self._prompt += [
+            dict(
+                type="text",
+                text=self._concrete_ex,
             )
         ]
 
@@ -815,26 +838,6 @@ Your plan should make use of the following Python functions to interact with a w
 """
 
         self._prompt += "\n" + self._concrete_ex
-
-
-# def make_action_set(action_flags: ActionFlags) -> AbstractActionSet:
-
-#     if action_flags.action_set == "python":
-#         action_set = PythonActionSet(strict=action_flags.is_strict)
-#         if action_flags.demo_mode != "off":
-#             warn(
-#                 f'Action_set "python" is incompatible with demo_mode={repr(action_flags.demo_mode)}.'
-#             )
-#         return action_set
-
-#     action_set = HighLevelActionSet(
-#         subsets=list(set(["chat"] + ["infeas"] + action_flags.action_set.split("+"))),
-#         multiaction=action_flags.multi_actions,
-#         strict=action_flags.is_strict,
-#         demo_mode=action_flags.demo_mode,
-#     )
-
-#     return action_set
 
 
 class Think(PromptElement):

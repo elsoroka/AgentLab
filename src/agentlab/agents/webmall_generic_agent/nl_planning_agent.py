@@ -35,7 +35,8 @@ from .nl_planning_agent_prompt import NlPlanningStepPrompt
 class NlPlanningAgentArgs(AgentArgs):
     chat_model_args: BaseModelArgs = None
     flags: GenericPromptFlags = None
-    max_retry: int = 4
+    max_retry: int = 1
+    max_steps: int = 50
 
     def __post_init__(self):
         try:  # some attributes might be temporarily args.CrossProd for hyperparameter generation
@@ -73,7 +74,10 @@ class NlPlanningAgentArgs(AgentArgs):
 
     def make_agent(self):
         return NlPlanningAgent(
-            chat_model_args=self.chat_model_args, flags=self.flags, max_retry=self.max_retry
+            chat_model_args=self.chat_model_args,
+            flags=self.flags,
+            max_retry=self.max_retry,
+            max_steps=self.max_steps
         )
 
 
@@ -83,12 +87,14 @@ class NlPlanningAgent(Agent):
         self,
         chat_model_args: BaseModelArgs,
         flags: GenericPromptFlags,
-        max_retry: int = 4,
+        max_retry: int = 1,
+        max_steps: int = 50,
     ):
 
         self.chat_llm = chat_model_args.make_model()
         self.chat_model_args = chat_model_args
         self.max_retry = max_retry
+        self.max_steps = max_steps
 
         self.flags = flags
         self.action_set = self.flags.action.action_set.make_action_set()
@@ -106,7 +112,10 @@ class NlPlanningAgent(Agent):
         """Call the LLM once to produce a high-level natural language plan for the task."""
         goal_object = obs.get("goal_object", [{"type": "text", "text": str(obs.get("goal", ""))}])
         system_prompt = SystemMessage(dp.NlPlanningSystemPrompt().prompt)
-        human_prompt = HumanMessage(dp.NlPlanGoalPrompt(goal_object).prompt)
+        goal_object = dp.NlPlanGoalPrompt(
+                self.obs_history[-1]["goal_object"]
+            )
+        human_prompt = HumanMessage(goal_object.prompt)
         chat_messages = Discussion([system_prompt, human_prompt])
 
         def parse_plan(text):
@@ -117,7 +126,7 @@ class NlPlanningAgent(Agent):
             except ParseError:
                 logger.error(f"_generate_nl_plan: failed to parse plan: {text}")
                 return {"plan": [text]}
-
+        #print(f"chat_messages: {chat_messages}")
         ans_dict = llm_retry(
             self.chat_llm,
             chat_messages,
@@ -132,6 +141,16 @@ class NlPlanningAgent(Agent):
 
     @cost_tracker_decorator
     def get_action(self, obs):
+
+        if len(self.full_action_history) + len(self.actions) >= self.max_steps:
+            logger.info(f"Step limit ({self.max_steps}) reached; stopping agent.")
+            return None, AgentInfo(
+                think=None,
+                chat_messages=None,
+                stats=None,
+                action=None,
+                extra_info={"chat_model_args": asdict(self.chat_model_args)},
+            )
 
         self.obs_history.append(obs)
 
@@ -152,6 +171,7 @@ class NlPlanningAgent(Agent):
             previous_plan=self.plan,
             step=self.plan_step,
             flags=self.flags,
+            notes_from_previous_step=self.notes_from_previous_step,
         )
 
         max_prompt_tokens, max_trunc_itr = self._get_maxes()
@@ -170,6 +190,7 @@ class NlPlanningAgent(Agent):
             # cause it to be too long
 
             chat_messages = Discussion([system_prompt, human_prompt])
+            #print(f"chat_messages: {chat_messages}")
             ans_dict = llm_retry(
                 self.chat_llm,
                 chat_messages,
@@ -203,7 +224,7 @@ class NlPlanningAgent(Agent):
                     self.actions = []
                     self.full_memories += self.memories
                     self.full_thoughts += self.thoughts
-                    self.memories = self.notes_from_previous_step
+                    self.memories = []
                     self.thoughts = []
                     
                     logger.info(f"go_to_next_step: notes from previous step: {notes}")
@@ -236,6 +257,7 @@ class NlPlanningAgent(Agent):
             extra_info={"chat_model_args": asdict(self.chat_model_args)},
         )
         return ans_dict["action"], agent_info
+
 
     def reset(self, seed=None):
         self.seed = seed
