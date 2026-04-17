@@ -37,7 +37,7 @@ from .executor_prompts import (
     add_to_cart_prompt,
     checkout_prompt,
 )
-from agentlab.llm.tracking import cost_tracker_decorator
+from agentlab.llm.tracking import cost_tracker_decorator, TRACKER
 
 from agentlab.llm.llm_utils import retry
 
@@ -350,6 +350,11 @@ class PlanningAgent(Agent):
         the planner/executor consume observations from the observation queue and produce actions on the action queue.
         this function puts the new observation in the observation queue and consumes an action from the action queue.
         """
+        # Save a reference to the main-thread tracker so the executor thread can use it.
+        # TRACKER is threading.local(), so the executor thread would otherwise see no tracker
+        # and all executor LLM costs would be silently dropped.
+        self._current_tracker = getattr(TRACKER, 'instance', None)
+
         if len(self.actions) > 0 or len(self.all_actions) > 0:
             try:
                 self.action_queue.task_done() # corresponds to the previous action
@@ -735,6 +740,14 @@ does not support vision. Disabling use_screenshot."""
         # There can be more than one if the previous action was hardcoded, such as opening a tab or going to a URL.
         # wait for previous actions to be consumed in the main thread
         self.action_queue.join()
+
+        # Propagate the main thread's cost tracker into this executor thread AFTER the join.
+        # The join can block for multiple get_action cycles (e.g. while hardcoded new_tab/goto
+        # actions are consumed). Setting the tracker before the join would capture a stale
+        # tracker from a get_action call that has already returned, so tokens would accumulate
+        # in an expired tracker and be lost. After the join, self._current_tracker is guaranteed
+        # to belong to the get_action call that is currently blocking on action_queue.get().
+        TRACKER.instance = getattr(self, '_current_tracker', None)
 
         if self._stop_event.is_set():
             logger.info("generic_action_step: stop event set, exiting.")
