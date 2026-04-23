@@ -52,7 +52,7 @@ class PlanningAgentArgs(AgentArgs):
     flags: PlannerPromptFlags = None
     max_retry: int = 1
     max_steps: int = 50 # 50 matches the WebMall paper
-    plan_from_file = None
+    plan_from_file: Optional[str] = None
 
     def __post_init__(self):
         self.keyed_plans = dict()
@@ -74,7 +74,9 @@ class PlanningAgentArgs(AgentArgs):
         
         self.keyed_plans = dict()
         for plan in data:
-            self.keyed_plans[plan['id']] = plan['clean_response'] if 'clean_response' in plan else None
+            raw = plan.get('clean_response', None)
+            # Normalize the string "None" (produced by some plan generators) to Python None
+            self.keyed_plans[plan['id']] = None if raw is None or raw == "None" else raw
         
 
     def set_benchmark(self, benchmark: bgym.Benchmark, demo_mode):
@@ -135,6 +137,7 @@ class PlanningAgent(Agent):
         self.plan = None
         self.plan_step = 0
         self.keyed_plans = keyed_plans
+        self.task_name = None  # set by ExpArgsWebMall.run() before first get_action call
 
         if not self.keyed_plans:
             self.planner_llm = planner_model_args.make_model()
@@ -201,20 +204,23 @@ class PlanningAgent(Agent):
 
         model_args = self.planner_model_args
         try:
-            # system prompt for the PLANNER agent which prompts it to make a plan, no action.
-            system_prompt = SystemMessage(dp.PlannerSystemPromptElement().prompt)
-            main_prompt = PlannerSystemPrompt(
-                self.planner_action_set,
-                obs_history=self.obs_history,
-                actions=self.actions,
-                memories=self.memories,
-                thoughts=self.thoughts,
-                previous_plan=self.plan,
-                step=self.plan_step,
-                flags=self.flags,
-            )
+            ans_dict = {}
+            chat_messages = None
 
             if not self.keyed_plans:
+                # system prompt for the PLANNER agent which prompts it to make a plan, no action.
+                system_prompt = SystemMessage(dp.PlannerSystemPromptElement().prompt)
+                main_prompt = PlannerSystemPrompt(
+                    self.planner_action_set,
+                    obs_history=self.obs_history,
+                    actions=self.actions,
+                    memories=self.memories,
+                    thoughts=self.thoughts,
+                    previous_plan=self.plan,
+                    step=self.plan_step,
+                    flags=self.flags,
+                )
+
                 max_prompt_tokens, max_trunc_itr = self._get_maxes()
 
                 human_prompt = dp.fit_tokens(
@@ -225,7 +231,7 @@ class PlanningAgent(Agent):
                     additional_prompts=[],
                 )
                 chat_messages = Discussion([system_prompt, human_prompt])
-                
+
                 ans_dict = retry(
                 self.planner_llm,
                 chat_messages,
@@ -234,9 +240,17 @@ class PlanningAgent(Agent):
                 )
                 planner_stats = self.planner_llm.get_stats()
                 self.plan = ans_dict["plan"]
-            
+
             else:
-                self.plan = self.keyed_plans[obs["task_id"]]
+                self.plan = self.keyed_plans.get(self.task_name)
+                if self.plan is None:
+                    logger.warning("No pre-loaded plan for task_id=%s; skipping execution.", self.task_name)
+                    finished_action = {"action": "finished_plan()", "n_retry": 0, "busted_retry": 0}
+                    self.action_queue.put((finished_action, self.dummy_agent_info))
+                    self.obs_history.pop()
+                    return
+                else:
+                    logger.info("Using pre-loaded plan for task_id=%s", self.task_name)
                 # TODO fix we would need to import a tokenizer to count the tokens in the plan
                 planner_stats = dict(
                     total_tokens=0,
@@ -244,7 +258,7 @@ class PlanningAgent(Agent):
                     completion_tokens=0,
                     total_cost=0,
                 )
-            
+
             if "<plan>" in self.plan:
                 self.plan = self.plan.split("<plan>")[1].split("</plan>")[0]
             if '```' in self.plan:
