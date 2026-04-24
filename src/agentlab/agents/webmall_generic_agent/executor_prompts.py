@@ -12,7 +12,7 @@ def search_on_page_prompt(search_text: str, selection_criteria="best match") -> 
     <action>
     report_infeasible()
     </action>
-    If search fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    If search fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -27,7 +27,7 @@ def navigate_to_page_prompt(description: str) -> str:
     <action>
     report_infeasible()
     </action>
-    If navigation fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    If navigation fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -43,7 +43,7 @@ def extract_information_from_page_prompt(description: str, _type:str="str") -> s
     <action>
     report_infeasible()
     </action>
-    If extraction fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    If extraction fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -58,7 +58,7 @@ When finished, return
     <action>
     report_infeasible()
     </action>
-    If filling the text field fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    If filling the text field fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -73,7 +73,7 @@ When finished, return
     <action>
     report_infeasible()
     </action>
-    If pressing the button fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    If pressing the button fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -88,7 +88,7 @@ def select_option_prompt(bid: str, options: str | list[str]) -> str:
     <action>
     report_infeasible()
     </action>
-    If selecting the option fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    If selecting the option fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -103,7 +103,7 @@ def add_to_cart_prompt(item_description: str) -> str:
     <action>
     report_infeasible()
     </action>
-    If adding to the cart fails three times in a row return report_infeasible(). Don't keep trying the same thing over and over.
+    If adding to the cart fails two times in a row return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p
 
@@ -119,6 +119,6 @@ When finished, return
     <action>
     report_infeasible()
     </action>
-    If checkout fails three times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    If checkout fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
 """
     return p

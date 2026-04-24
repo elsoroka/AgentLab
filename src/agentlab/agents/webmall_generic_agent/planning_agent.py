@@ -74,9 +74,11 @@ class PlanningAgentArgs(AgentArgs):
         
         self.keyed_plans = dict()
         for plan in data:
-            raw = plan.get('clean_response', None)
+            raw = plan.get('final_plan', None)
+            if raw is None:
+                raw = plan.get('clean_response', None)
             # Normalize the string "None" (produced by some plan generators) to Python None
-            self.keyed_plans[plan['id']] = None if raw is None or raw == "None" else raw
+            self.keyed_plans[plan['task_id']] = None if raw is None or raw == "None" else raw
         
 
     def set_benchmark(self, benchmark: bgym.Benchmark, demo_mode):

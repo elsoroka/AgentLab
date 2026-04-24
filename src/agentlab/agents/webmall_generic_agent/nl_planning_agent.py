@@ -8,8 +8,10 @@ state such as plans, memories, and thoughts. The `NlPlanningAgentArgs` class pro
 the agent, including model arguments and flags for various behaviors.
 """
 
+import json
 import logging
 from copy import deepcopy
+from typing import Optional
 
 from Browsergym.browsergym.experiments.src.browsergym.experiments.benchmark.configs import DEFAULT_HIGHLEVEL_ACTION_SET_ARGS
 
@@ -37,12 +39,38 @@ class NlPlanningAgentArgs(AgentArgs):
     flags: GenericPromptFlags = None
     max_retry: int = 1
     max_steps: int = 50
+    plan_from_file: Optional[str] = None
 
     def __post_init__(self):
+        self.keyed_plans = dict()
+
         try:  # some attributes might be temporarily args.CrossProd for hyperparameter generation
             self.agent_name = f"NlPlanningAgent-{self.chat_model_args.model_name}".replace("/", "_")
         except AttributeError:
             pass
+
+        if self.plan_from_file:
+            self.load_plan_from_file(self.plan_from_file)
+
+    def load_plan_from_file(self, plan_from_file: str):
+        with open(plan_from_file, 'r') as file:
+            data = [json.loads(line) for line in file.readlines()]
+        if data[0].keys() != data[1].keys():
+            # data[0] is config
+            data = data[1:]
+
+        self.keyed_plans = dict()
+        for plan in data:
+            raw = plan.get('final_plan', None)
+            if raw is None:
+                raw = plan.get('clean_response', None)
+            # Normalize the string "None" (produced by some plan generators) to Python None
+            if raw is None or raw == "None":
+                self.keyed_plans[plan['task_id']] = None
+            else:
+                assert isinstance(raw, list)
+                assert all(isinstance(item, str) for item in raw)
+                self.keyed_plans[plan['task_id']] = raw
 
     def set_benchmark(self, benchmark: bgym.Benchmark, demo_mode):
         """Override Some flags based on the benchmark."""
@@ -77,7 +105,8 @@ class NlPlanningAgentArgs(AgentArgs):
             chat_model_args=self.chat_model_args,
             flags=self.flags,
             max_retry=self.max_retry,
-            max_steps=self.max_steps
+            max_steps=self.max_steps,
+            keyed_plans=self.keyed_plans if len(self.keyed_plans) > 0 else None,
         )
 
 
@@ -89,7 +118,10 @@ class NlPlanningAgent(Agent):
         flags: GenericPromptFlags,
         max_retry: int = 1,
         max_steps: int = 50,
+        keyed_plans: dict = None,
     ):
+        self.keyed_plans = keyed_plans
+        self.task_name = None  # set by ExpArgsWebMall.run() before first get_action call
 
         self.chat_llm = chat_model_args.make_model()
         self.chat_model_args = chat_model_args
@@ -108,8 +140,28 @@ class NlPlanningAgent(Agent):
         self.full_memories = []
         self.full_thoughts = []
 
+    def _parse_nl_plan_text(self, text: str) -> list[str]:
+        """Parse a raw plan string into a list of step strings."""
+        try:
+            result = parse_html_tags_raise(text, keys=["plan"])
+            steps = [line.strip() for line in result["plan"].splitlines() if line.strip()]
+            return steps
+        except ParseError:
+            steps = [line.strip() for line in text.splitlines() if line.strip()]
+            return steps if steps else [text]
+
     def _generate_nl_plan(self, obs) -> list[str]:
-        """Call the LLM once to produce a high-level natural language plan for the task."""
+        """Call the LLM once to produce a high-level natural language plan for the task.
+        If a pre-loaded plan is available for this task, use it instead of calling the LLM.
+        """
+        if self.keyed_plans is not None:
+            steps = self.keyed_plans.get(self.task_name)
+            if steps is None:
+                logger.warning("No pre-loaded plan for task_id=%s; falling back to a single-step plan.", self.task_name)
+                return ["Complete the task."]
+            logger.info("Using pre-loaded plan for task_id=%s: %s", self.task_name, steps)
+            return steps
+
         goal_object = obs.get("goal_object", [{"type": "text", "text": str(obs.get("goal", ""))}])
         system_prompt = SystemMessage(dp.NlPlanningSystemPrompt().prompt)
         goal_object = dp.NlPlanGoalPrompt(
@@ -119,14 +171,9 @@ class NlPlanningAgent(Agent):
         chat_messages = Discussion([system_prompt, human_prompt])
 
         def parse_plan(text):
-            try:
-                result = parse_html_tags_raise(text, keys=["plan"])
-                steps = [line.strip() for line in result["plan"].splitlines() if line.strip()]
-                return {"plan": steps}
-            except ParseError:
-                logger.error(f"_generate_nl_plan: failed to parse plan: {text}")
-                return {"plan": [text]}
-        #print(f"chat_messages: {chat_messages}")
+            steps = self._parse_nl_plan_text(text)
+            return {"plan": steps}
+
         ans_dict = llm_retry(
             self.chat_llm,
             chat_messages,
