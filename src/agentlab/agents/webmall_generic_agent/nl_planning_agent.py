@@ -66,11 +66,11 @@ class NlPlanningAgentArgs(AgentArgs):
                 raw = plan.get('clean_response', None)
             # Normalize the string "None" (produced by some plan generators) to Python None
             if raw is None or raw == "None":
-                self.keyed_plans[plan['task_id']] = None
+                self.keyed_plans[plan['task_id' if 'task_id' in plan else 'id']] = None
             else:
                 assert isinstance(raw, list)
                 assert all(isinstance(item, str) for item in raw)
-                self.keyed_plans[plan['task_id']] = raw
+                self.keyed_plans[plan['task_id' if 'task_id' in plan else 'id']] = raw
 
     def set_benchmark(self, benchmark: bgym.Benchmark, demo_mode):
         """Override Some flags based on the benchmark."""
