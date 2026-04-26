@@ -236,8 +236,8 @@ CHAT_MODEL_ARGS_DICT = {
         backend="vllm",
         n_retry_server=4,
     ),
-    "vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8": SelfHostedModelArgs(
-        model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct": SelfHostedModelArgs(
+        model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct",
         max_total_tokens=32_768,
         max_input_tokens=31_000,
         max_new_tokens=1_768,

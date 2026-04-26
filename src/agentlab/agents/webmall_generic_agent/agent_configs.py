@@ -374,7 +374,7 @@ AGENT_VLLM_QWEN25_7B = PlanningAgentArgs(
 )
 
 AGENT_VLLM_QWEN3_30B = PlanningAgentArgs(
-    planner_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"],
-    executor_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"],
+    planner_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct"],
+    executor_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct"],
     flags=FLAGS_8B,
 )

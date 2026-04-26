@@ -472,8 +472,8 @@ CHAT_MODEL_ARGS_DICT = {
         max_new_tokens=1_768,
         temperature=0.1,
     ),
-    "vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8": VLLMModelArgs(
-        model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    "vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct": VLLMModelArgs(
+        model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct",
         max_total_tokens=32_768,
         max_input_tokens=31_000,
         max_new_tokens=1_768,

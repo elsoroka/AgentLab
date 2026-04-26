@@ -78,7 +78,7 @@ class PlanningAgentArgs(AgentArgs):
             if raw is None:
                 raw = plan.get('clean_response', None)
             # Normalize the string "None" (produced by some plan generators) to Python None
-            self.keyed_plans[plan['task_id']] = None if raw is None or raw == "None" else raw
+            self.keyed_plans[plan['task_id' if 'task_id' in plan else 'id']] = None if raw is None or raw == "None" else raw
         
 
     def set_benchmark(self, benchmark: bgym.Benchmark, demo_mode):
