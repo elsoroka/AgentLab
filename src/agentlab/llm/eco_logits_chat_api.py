@@ -462,20 +462,21 @@ class VLLMChatModel(ChatModelEcoLogits):
         self,
         model_name,
         api_key=None,
+        api_base=None,
         temperature=0.5,
         max_tokens=100,
         n_retry_server=4,
         min_retry_wait_time=60,
     ):
+        base_url = api_base or os.getenv("VLLM_API_URL", "http://localhost:8000/v1")
         super().__init__(
             model_name=model_name,
-            api_key=api_key,
+            api_key=api_key or os.getenv("VLLM_API_KEY", "EMPTY"),
             temperature=temperature,
             max_tokens=max_tokens,
             max_retry=n_retry_server,
             min_retry_wait_time=min_retry_wait_time,
-            api_key_env_var="VLLM_API_KEY",
             client_class=OpenAI,
-            client_args={"base_url": "http://0.0.0.0:8000/v1"},
+            client_args={"base_url": base_url},
             pricing_func=None,
         )

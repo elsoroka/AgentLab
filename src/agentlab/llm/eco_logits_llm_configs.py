@@ -207,4 +207,42 @@ CHAT_MODEL_ARGS_DICT = {
         max_new_tokens=64_000,
         temperature=1e-1,
     ),
+    # ---------------- Local vLLM server (http://localhost:8000) ----------------#
+    # Requires a running vLLM server. Set VLLM_API_URL env var to override the URL.
+    "vllm/deepseek-ai/deepseek-coder-6.7b-instruct": SelfHostedModelArgs(
+        model_name="deepseek-ai/deepseek-coder-6.7b-instruct",
+        max_total_tokens=16_384,
+        max_input_tokens=15_000,
+        max_new_tokens=1_384,
+        temperature=0.1,
+        backend="vllm",
+        n_retry_server=4,
+    ),
+    "vllm/deepseek-ai/deepseek-coder-33b-instruct": SelfHostedModelArgs(
+        model_name="deepseek-ai/deepseek-coder-33b-instruct",
+        max_total_tokens=16_384,
+        max_input_tokens=15_000,
+        max_new_tokens=1_384,
+        temperature=0.1,
+        backend="vllm",
+        n_retry_server=4,
+    ),
+    "vllm/Qwen/Qwen2.5-Coder-7B-Instruct": SelfHostedModelArgs(
+        model_name="Qwen/Qwen2.5-Coder-7B-Instruct",
+        max_total_tokens=32_768,
+        max_input_tokens=31_000,
+        max_new_tokens=1_768,
+        temperature=0.1,
+        backend="vllm",
+        n_retry_server=4,
+    ),
+    "vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8": SelfHostedModelArgs(
+        model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+        max_total_tokens=32_768,
+        max_input_tokens=31_000,
+        max_new_tokens=1_768,
+        temperature=0.1,
+        backend="vllm",
+        n_retry_server=4,
+    ),
 }

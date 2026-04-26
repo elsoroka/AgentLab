@@ -8,6 +8,7 @@ from agentlab.llm.chat_api import (
     SelfHostedModelArgs,
     AnthropicModelArgs,
     StanfordModelArgs,
+    VLLMModelArgs,
 )
 
 default_oss_llms_args = {
@@ -447,5 +448,35 @@ CHAT_MODEL_ARGS_DICT = {
         max_new_tokens=16_384,
         temperature=1e-1,
         vision_support=False,
+    ),
+    # ---------------- Local vLLM server (http://localhost:8000) ----------------#
+    # Requires a running vLLM server. Set VLLM_API_URL env var to override the URL.
+    "vllm/deepseek-ai/deepseek-coder-6.7b-instruct": VLLMModelArgs(
+        model_name="deepseek-ai/deepseek-coder-6.7b-instruct",
+        max_total_tokens=16_384,
+        max_input_tokens=15_000,
+        max_new_tokens=1_384,
+        temperature=0.1,
+    ),
+    "vllm/deepseek-ai/deepseek-coder-33b-instruct": VLLMModelArgs(
+        model_name="deepseek-ai/deepseek-coder-33b-instruct",
+        max_total_tokens=16_384,
+        max_input_tokens=15_000,
+        max_new_tokens=1_384,
+        temperature=0.1,
+    ),
+    "vllm/Qwen/Qwen2.5-Coder-7B-Instruct": VLLMModelArgs(
+        model_name="Qwen/Qwen2.5-Coder-7B-Instruct",
+        max_total_tokens=32_768,
+        max_input_tokens=31_000,
+        max_new_tokens=1_768,
+        temperature=0.1,
+    ),
+    "vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8": VLLMModelArgs(
+        model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+        max_total_tokens=32_768,
+        max_input_tokens=31_000,
+        max_new_tokens=1_768,
+        temperature=0.1,
     ),
 }

@@ -353,3 +353,28 @@ AGENT_5_PLANNER = PlanningAgentArgs(
     executor_model_args=CHAT_MODEL_ARGS_DICT["openai/gpt-4o-2024-05-13"],
     flags=DEFAULT_RS_FLAGS,
 )
+
+# Local vLLM agents — point to http://localhost:8000 by default (set VLLM_API_URL to override)
+AGENT_VLLM_DEEPSEEK_6_7B = PlanningAgentArgs(
+    planner_model_args=CHAT_MODEL_ARGS_DICT["vllm/deepseek-ai/deepseek-coder-6.7b-instruct"],
+    executor_model_args=CHAT_MODEL_ARGS_DICT["vllm/deepseek-ai/deepseek-coder-6.7b-instruct"],
+    flags=FLAGS_8B,
+)
+
+AGENT_VLLM_DEEPSEEK_33B = PlanningAgentArgs(
+    planner_model_args=CHAT_MODEL_ARGS_DICT["vllm/deepseek-ai/deepseek-coder-33b-instruct"],
+    executor_model_args=CHAT_MODEL_ARGS_DICT["vllm/deepseek-ai/deepseek-coder-33b-instruct"],
+    flags=FLAGS_8B,
+)
+
+AGENT_VLLM_QWEN25_7B = PlanningAgentArgs(
+    planner_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen2.5-Coder-7B-Instruct"],
+    executor_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen2.5-Coder-7B-Instruct"],
+    flags=FLAGS_8B,
+)
+
+AGENT_VLLM_QWEN3_30B = PlanningAgentArgs(
+    planner_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"],
+    executor_model_args=CHAT_MODEL_ARGS_DICT["vllm/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"],
+    flags=FLAGS_8B,
+)

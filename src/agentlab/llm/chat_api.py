@@ -509,22 +509,45 @@ class VLLMChatModel(ChatModel):
         self,
         model_name,
         api_key=None,
+        api_base=None,
         temperature=0.5,
         max_tokens=100,
         n_retry_server=4,
         min_retry_wait_time=60,
     ):
+        base_url = api_base or os.getenv("VLLM_API_URL", "http://localhost:8000/v1")
         super().__init__(
             model_name=model_name,
-            api_key=api_key,
+            api_key=api_key or os.getenv("VLLM_API_KEY", "EMPTY"),
             temperature=temperature,
             max_tokens=max_tokens,
             max_retry=n_retry_server,
             min_retry_wait_time=min_retry_wait_time,
-            api_key_env_var="VLLM_API_KEY",
             client_class=OpenAI,
-            client_args={"base_url": os.getenv("VLLM_API_URL", "http://localhost:8000/v1")},
+            client_args={"base_url": base_url},
             pricing_func=None,
+        )
+
+
+@dataclass
+class VLLMModelArgs(BaseModelArgs):
+    """Serializable object for instantiating a chat model served by a local vLLM server.
+
+    The server must expose an OpenAI-compatible API (default: http://localhost:8000/v1).
+    Override api_base or set the VLLM_API_URL environment variable to point to a different URL.
+    No API key is required — vLLM accepts any non-empty string (defaults to 'EMPTY').
+    """
+
+    api_base: str = None  # e.g. "http://localhost:8000/v1"; falls back to VLLM_API_URL env var
+    n_retry_server: int = 4
+
+    def make_model(self):
+        return VLLMChatModel(
+            model_name=self.model_name,
+            api_base=self.api_base,
+            temperature=self.temperature,
+            max_tokens=self.max_new_tokens,
+            n_retry_server=self.n_retry_server,
         )
 
 
