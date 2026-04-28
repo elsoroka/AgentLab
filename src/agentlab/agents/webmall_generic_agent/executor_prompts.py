@@ -1,9 +1,9 @@
 from AgentLab.src.agentlab.agents.dynamic_prompting import PromptElement
 
 
-def search_on_page_prompt(search_text: str, selection_criteria="best match") -> str:
+def search_on_page_prompt(search_text: str, selection_criteria="best match", website_url: str = 'https://localhost:8081') -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""Search for the product {search_text} and gather the URLS for the pages that best match the selection criteria: {selection_criteria}. If more than one URL matches, return the URLS as a string separated by ###.
+    p._prompt = f"""Search for the product {search_text} on the website {website_url} and gather the URLS for the pages that best match the selection criteria: {selection_criteria}. Focus on {website_url}; don't visit any other websites. If more than one URL matches the selection criteria, return the URLS as a string separated by ###.
     Example:
     <action>
     report_result(url="https://www.example1.com###https://www.example2.com")
@@ -12,7 +12,10 @@ def search_on_page_prompt(search_text: str, selection_criteria="best match") -> 
     <action>
     report_infeasible()
     </action>
+    Hints:
+    If your first search fails, try again with broader search terms.
     If search fails two times in a row, return report_infeasible(). Don't keep trying the same thing over and over.
+    Check the selection criteria carefully and consider visiting the pages of multiple search results to pick the best one.
 """
     return p
 
@@ -31,9 +34,10 @@ def navigate_to_page_prompt(description: str) -> str:
 """
     return p
 
-def extract_information_from_page_prompt(description: str, _type:str="str") -> str:
+def extract_information_from_page_prompt(description: str, _type:str="str", url: str = None) -> str:
     p = PromptElement(visible=True)
-    p._prompt = f"""On the current page, extract the information described by the following description: {description} and return it as a {_type} using the function report_result() If the information is not on this page, return report_infeasible().
+    page_ref = f"the page at {url}" if url else "the current page"
+    p._prompt = f"""On {page_ref}, extract the information described by the following description: {description} and return it as a {_type} using the function report_result() If the information is not on this page, return report_infeasible().
     If you return a number, make sure to remove all non-numeric characters and punctuation first.
     When finished, return
     <action>

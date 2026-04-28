@@ -585,18 +585,20 @@ does not support vision. Disabling use_screenshot."""
 
     
 
-    def extract_information_from_page(self, description:str, _type:str="str") -> int | float | str | None:
-        """Extract text from the current page that fits the given description and matches the given type.
+    def extract_information_from_page(self, description:str, _type:str="str", url:str=None) -> int | float | str | None:
+        """Extract text from the page at url (or the current page if url is None) that fits the given description and matches the given type.
         Returns a value cast to the given type, or None if the information cannot be found.
 
         Examples:
-        extract_information_from_page("The lowest price of the product.", "float")
+        extract_information_from_page("The lowest price of the product.", "float", "http://localhost:8081/product/123")
         """
         self.action_queue.join()
         final_result = None
         self.reset()
+        if url:
+            self.open_page(url)
         while final_result is None and not self._stop_event.is_set():
-            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description, _type))
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description, _type, url))
         
         raw_result = final_result
         logger.info(f"extract_information_from_page({description}) returned raw result {raw_result}")
