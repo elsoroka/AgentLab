@@ -537,7 +537,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.put((ans_dict, self.dummy_agent_info))
         return None
 
-    def open_page(self, url:str):
+    def open_page(self, url:str) -> bool:
         self.action_queue.join()
 
         ans_dict = {
@@ -554,7 +554,7 @@ does not support vision. Disabling use_screenshot."""
         self.action_queue.put((ans_dict, self.dummy_agent_info))
         return True
 
-    def close_page(self):
+    def close_page(self) -> bool:
         ans_dict = {
             "action": f"tab_close()",
             "n_retry": 0,
@@ -564,7 +564,7 @@ does not support vision. Disabling use_screenshot."""
         return True
     
 
-    def navigate_to_page(self, description:str):
+    def navigate_to_page(self, description:str) -> bool:
         """Navigate to a page that fits the given description. Return True if successful, False otherwise.
 
         Examples:
@@ -585,12 +585,12 @@ does not support vision. Disabling use_screenshot."""
 
     
 
-    def extract_information_from_page(self, description:str, _type:str="str"):
+    def extract_information_from_page(self, description:str, _type:str="str") -> int | float | str | None:
         """Extract text from the current page that fits the given description and matches the given type.
-        Guaranteed to return a value of the given type or None if the information cannot be found.
+        Returns a value cast to the given type, or None if the information cannot be found.
 
         Examples:
-        extract_information_from_page("The lowest price of the product.", float)
+        extract_information_from_page("The lowest price of the product.", "float")
         """
         self.action_queue.join()
         final_result = None
@@ -615,21 +615,23 @@ does not support vision. Disabling use_screenshot."""
         logger.info(f"extract_information_from_page({description}) returned {final_result} from raw result {raw_result}")
         return final_result
 
-    def search_on_page(self, url:str=None, search_text:str=None, selection_criteria='', search_page_url:str=None)->Optional[list[str]]:
-        """Open the search_page_url and search for the search_text. Return a list of page URLs that matche the selection criteria as a string, or None if not found.
+    def search_on_page(self, url:str=None, search_text:str=None, selection_criteria:str='', search_page_url:str=None) -> str:
+        """Search for search_text on the store at url. Returns a '###'-separated string of matching product page URLs, or '' if none found.
 
         Examples:
-        search_on_page("https://www.google.com", "Python")
+        search_on_page("http://localhost:8081", "HDMI cable", "HDMI cable longer than 3 metres")
         """
         # stupid hack here, we should really fix the planner to not do this
         if not url:
             url =  search_page_url
+        
+        url_stem = 'http://' + url.split('//')[1].split('/')[0] # makes urls like http://localhost:8081
         self.action_queue.join()
         final_result = None
         self.reset()
         self.open_page(url)
         while final_result is None and not self._stop_event.is_set():
-            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text, selection_criteria))
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=search_on_page_prompt(search_text, selection_criteria, url_stem))
         
         #self.action_queue.join()
         
@@ -640,7 +642,7 @@ does not support vision. Disabling use_screenshot."""
 
 
 
-    def add_to_cart(self, url:str, item_description:str):
+    def add_to_cart(self, url:str, item_description:str) -> bool:
         """Add the product to the cart. Return True if successful, False otherwise.
 
         Examples:
@@ -660,7 +662,7 @@ does not support vision. Disabling use_screenshot."""
         logger.info(f"add_to_cart({item_description}) returned {final_result}")
         return final_result
 
-    def checkout(self, payment_and_shipping_information:str):
+    def checkout(self, payment_and_shipping_information:str) -> bool:
         """Checkout from the current page. Return True if successful, False otherwise.
 
         Examples:

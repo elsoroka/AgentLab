@@ -497,6 +497,8 @@ class PlannerGoalInstructions(PromptElement):
 # Instructions
 Use the provided Python functions to write a plan in Python code to reach the goal. Do not solve the task yourself; only write the plan. Write a simple plan without considering edge cases.
 
+When searching for products with specific requirements, always pass the full requirements as the `selection_criteria` argument to `search_on_page`. Do not search with a generic term and then filter results in Python.
+
 ## Goal:
 """,
             )
@@ -577,6 +579,12 @@ and executed by a program, make sure to follow the formatting instructions.
 ## Extra instructions:
 
 {extra_instructions}
+
+## Hints:
+** When searching:** If your first search fails, try again with broader search terms.
+Check the selection criteria carefully and consider visiting the pages of multiple search results to pick the best one.
+
+If your attempts to search, navigate to a page, find information or interact with a page fail two times in a row, stop and move on to the next step. Don't keep trying the same thing over and over.
 """,
                 )
             ]
@@ -642,8 +650,8 @@ An LLM will execute your functions and it can fail, so pay attention to the retu
 function can return None, check for this case in your code.
 
 Hints:
-When you search for a product using search_on_page, provide all the constraints to the searcher LLM in `selection_criteria` so it can pick the correct product from the search results.
-It's better to have a more general search text and put specific constraints in `selection_criteria`.
+When you search for a product using search_on_page, provide the full description to the searcher LLM in `selection_criteria` so it can pick the correct product from the search results.
+It's better to use a more general `search text` and put specific constraints in `selection_criteria`.
 Remember that search_on_page returns a string of URLs separated by ###, not a list.
 """
 
@@ -795,23 +803,24 @@ elements in the page is through bid which are specified in your observations.
 
 class PlannerActionPromptElement(ActionPrompt):
 
-    _concrete_ex = """Example: Make a plan to find the cheapest offer for Product P.
+    _concrete_ex = """Example: Make a plan to find all stores selling HDMI cables longer than 3 metres.
 <plan>
-stores = ["http://localhost:8081/", "http://localhost:8082/", "http://localhost:8083/", "http://localhost:8084/"]
+stores = ["http://localhost:8081", "http://localhost:8082", "http://localhost:8083", "http://localhost:8084"]
 results = []
 
 for store in stores:
-    open_page(store)
-    urls = search_for_page(store, "Product P", "Cheapest match") # Return the product page URL or None if not found
-    for url in urls.split("###"):
-        price = extract_information_from_page("Lowest price of the product", "float")
-        results.append((url_or_none, price))
-    
-    close_page() # Close the page or load a new one with goto(url)
-selected_url = min(results, key=lambda x: x[1])[0]
+    # Pass the full criteria as selection_criteria so the executor finds matching products directly
+    urls_str = search_on_page(store, "HDMI cable", "HDMI cable longer than 3 metres")
+    if urls_str:
+        results.extend(urls_str.split("###"))
 
-open_page("http://localhost:3000/")
-fill_text_field("Solution field", selected_url)
+if results:
+    final_answer = "###".join(results)
+else:
+    final_answer = "Done"
+
+open_page("http://localhost:8085/")
+fill_text_field("Type your final answer here...", final_answer)
 press_button("Submit Final Result")
 </plan>
 """
