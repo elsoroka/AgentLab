@@ -803,19 +803,21 @@ elements in the page is through bid which are specified in your observations.
 
 class PlannerActionPromptElement(ActionPrompt):
 
-    _concrete_ex = """Example: Make a plan to find all stores selling HDMI cables longer than 3 metres.
+    _concrete_ex = """Example: Make a plan to find the cheapest store selling Product P.
 <plan>
 stores = ["http://localhost:8081", "http://localhost:8082", "http://localhost:8083", "http://localhost:8084"]
 results = []
 
 for store in stores:
-    # Pass the full criteria as selection_criteria so the executor finds matching products directly
-    urls_str = search_on_page(store, "HDMI cable", "HDMI cable longer than 3 metres")
+    urls_str = search_on_page(store, "Product P", "Product P")
     if urls_str:
-        results.extend(urls_str.split("###"))
+        for url in urls_str.split("###"):
+            price = extract_information_from_page("The price of the product", url=url)
+            if price is not None:
+                results.append((price, url))
 
 if results:
-    final_answer = "###".join(results)
+    final_answer = min(results, key=lambda x: x[0])[1]
 else:
     final_answer = "Done"
 

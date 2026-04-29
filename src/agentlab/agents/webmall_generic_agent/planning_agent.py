@@ -335,6 +335,7 @@ class PlanningAgent(Agent):
 
     
     def safe_parse_int(self, value:Optional[str])->Union[int, float]:
+        print("raw result in safe_parse_int: ", value)
         if value is None:
             return float("NaN")
         
@@ -345,6 +346,7 @@ class PlanningAgent(Agent):
             return float("NaN")
     
     def safe_parse_float(self, value:Optional[str])->float:
+        print("raw result in safe_parse_float: ", value)
         if value is None or value == "":
             return None
         value = ''.join([v for v in value if v.isdigit() or v == '.' or v == ','])
@@ -488,7 +490,7 @@ does not support vision. Disabling use_screenshot."""
                 raw_action = raw_action.split("(")[1].split(")")[0]
             raw_action = raw_action.split(")")[0].strip("""'" """)
             return raw_action
-        elif 'done' in raw_action:
+        elif 'done' or 'noop' in raw_action:
             return True
         elif 'report_infeasible' in raw_action:
             return False
@@ -585,20 +587,19 @@ does not support vision. Disabling use_screenshot."""
 
     
 
-    def extract_information_from_page(self, description:str, _type:str="str", url:str=None) -> int | float | str | None:
-        """Extract text from the page at url (or the current page if url is None) that fits the given description and matches the given type.
+    def extract_information_from_page(self, description:str, url:str, _type:str="str") -> int | float | str | None:
+        """Extract text from the page at url that fits the given description and matches the given type.
         Returns a value cast to the given type, or None if the information cannot be found.
 
         Examples:
-        extract_information_from_page("The lowest price of the product.", "float", "http://localhost:8081/product/123")
+        extract_information_from_page("The lowest price of the product.", "http://localhost:8081/product/123", "float")
         """
         self.action_queue.join()
         final_result = None
         self.reset()
-        if url:
-            self.open_page(url)
+        self.open_page(url)
         while final_result is None and not self._stop_event.is_set():
-            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description, _type, url))
+            ans_dict, agent_info, final_result = self.generic_action_step(task_prompt=extract_information_from_page_prompt(description, url, _type))
         
         raw_result = final_result
         logger.info(f"extract_information_from_page({description}) returned raw result {raw_result}")
@@ -804,6 +805,20 @@ does not support vision. Disabling use_screenshot."""
         # this replaces the high-level goal with the executor's subgoal (e.g. "search for x", "find y information on this page")
         last_obs = deepcopy(self.obs_history[-1])
         high_level_goal = last_obs.get("goal", "")
+
+        # Include the original task as context so the executor knows the broader goal.
+        if high_level_goal:
+            # Extract just the <task>...</task> portion if present; otherwise use the full goal.
+            if "<task>" in high_level_goal and "</task>" in high_level_goal:
+                task_context = "<task>" + high_level_goal.split("<task>")[1].split("</task>")[0] + "</task>"
+            else:
+                task_context = high_level_goal
+            task_prompt = deepcopy(task_prompt)
+            task_prompt._prompt = (
+                task_prompt._prompt
+                + f"\n\nNote: The above sub-goal is one step toward accomplishing the following overall task. Keep this in mind when deciding how to act.\nOverall task: {task_context}"
+            )
+
         self.obs_history[-1]['goal'] = task_prompt.prompt
 
         system_prompt = SystemMessage(dp.SystemPrompt().prompt)
